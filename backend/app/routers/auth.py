@@ -72,7 +72,7 @@ async def login(
         )
 
     access_token = create_access_token(
-        data={"sub": admin.id, "username": admin.username, "role": admin.role}
+        data={"sub": str(admin.id), "username": admin.username, "role": admin.role}
     )
 
     return TokenResponse(
