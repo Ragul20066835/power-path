@@ -75,10 +75,18 @@ async def login(
         data={"sub": str(admin.id), "username": admin.username, "role": admin.role}
     )
 
+    user_public = AdminUserPublic(
+        id=str(admin.id),
+        username=admin.username,
+        email=admin.email,
+        role=admin.role,
+        created_at=admin.created_at,
+    )
+
     return TokenResponse(
         access_token=access_token,
         token_type="bearer",
-        user=AdminUserPublic.model_validate(admin)
+        user=user_public
     )
 
 
@@ -89,4 +97,10 @@ def get_current_admin_profile(
     """
     Validate active admin JWT token and return authenticated user profile.
     """
-    return AdminUserPublic.model_validate(current_admin)
+    return AdminUserPublic(
+        id=str(current_admin.id),
+        username=current_admin.username,
+        email=current_admin.email,
+        role=current_admin.role,
+        created_at=current_admin.created_at,
+    )

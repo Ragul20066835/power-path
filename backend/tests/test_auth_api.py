@@ -154,3 +154,74 @@ async def test_auth_me_with_raw_uuid_token(async_client, db_session):
     assert data["username"] == "uuiduser"
     assert data["role"] == "SUPER_ADMIN"
 
+
+@pytest.mark.anyio
+async def test_admin_login_when_admin_id_is_uuid(async_client, db_session, monkeypatch):
+    """Regression test: verify admin login succeeds when SQLAlchemy model has a uuid.UUID id."""
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock
+    from app.schemas import AdminUserPublic
+
+    test_uuid = uuid.uuid4()
+    admin_mock = MagicMock()
+    admin_mock.id = test_uuid
+    admin_mock.username = "uuidloginadmin"
+    admin_mock.email = "uuidlogin@powerpath.io"
+    admin_mock.hashed_password = get_password_hash("SecretPass123!")
+    admin_mock.role = "SUPER_ADMIN"
+    admin_mock.created_at = datetime.now(timezone.utc)
+
+    # Mock DB query to return our admin_mock with UUID id
+    orig_query = db_session.query
+
+    class MockQuery:
+        def filter(self, *args, **kwargs):
+            return self
+        def first(self):
+            return admin_mock
+
+    def mock_query(model):
+        if model == AdminUser:
+            return MockQuery()
+        return orig_query(model)
+
+    monkeypatch.setattr(db_session, "query", mock_query)
+
+    response = await async_client.post(
+        "/api/v1/auth/login",
+        json={"username": "uuidloginadmin", "password": "SecretPass123!"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "access_token" in data
+    assert data["token_type"] == "bearer"
+    assert data["user"]["id"] == str(test_uuid)
+    assert data["user"]["username"] == "uuidloginadmin"
+    assert data["user"]["email"] == "uuidlogin@powerpath.io"
+    assert data["user"]["role"] == "SUPER_ADMIN"
+
+
+def test_admin_user_public_model_validate_with_uuid():
+    """Verify AdminUserPublic.model_validate handles objects or dicts where id is a uuid.UUID."""
+    from datetime import datetime, timezone
+    from app.schemas import AdminUserPublic
+
+    test_uuid = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+
+    class DummyUser:
+        id = test_uuid
+        username = "validateduser"
+        email = "val@powerpath.io"
+        role = "EVENT_ADMIN"
+        created_at = now
+
+    public_user = AdminUserPublic.model_validate(DummyUser())
+    assert public_user.id == str(test_uuid)
+    assert isinstance(public_user.id, str)
+    assert public_user.username == "validateduser"
+    assert public_user.email == "val@powerpath.io"
+    assert public_user.role == "EVENT_ADMIN"
+    assert public_user.created_at == now
+
+

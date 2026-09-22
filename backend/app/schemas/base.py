@@ -4,7 +4,7 @@ POWERPATH Pydantic Validation & Serialization Schemas
 
 from datetime import datetime
 from typing import List, Optional, Any, Dict
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # -----------------------------------------------------------------------------
@@ -289,6 +289,13 @@ class AdminUserPublic(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def ensure_id_str(cls, v: Any) -> str:
+        if v is not None:
+            return str(v)
+        return v
 
 
 class TokenResponse(BaseModel):
