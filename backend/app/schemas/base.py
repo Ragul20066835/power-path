@@ -2,9 +2,32 @@
 POWERPATH Pydantic Validation & Serialization Schemas
 """
 
+import uuid
 from datetime import datetime
-from typing import List, Optional, Any, Dict
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import List, Optional, Any, Dict, Annotated
+from pydantic import BaseModel, ConfigDict, Field, BeforeValidator
+
+
+def _coerce_str(v: Any) -> Any:
+    """Safely converts UUID objects or any non-string ID values to strings."""
+    if isinstance(v, uuid.UUID):
+        return str(v)
+    if v is not None and not isinstance(v, str):
+        return str(v)
+    return v
+
+
+def _coerce_optional_str(v: Any) -> Any:
+    """Safely converts optional UUID objects or any non-string ID values to strings."""
+    if v is None:
+        return None
+    if isinstance(v, uuid.UUID):
+        return str(v)
+    return str(v)
+
+
+StrId = Annotated[str, BeforeValidator(_coerce_str)]
+OptionalStrId = Annotated[Optional[str], BeforeValidator(_coerce_optional_str)]
 
 
 # -----------------------------------------------------------------------------
@@ -22,7 +45,7 @@ class HealthResponse(BaseModel):
 # 2. COMPONENT CATALOGUE SCHEMAS
 # -----------------------------------------------------------------------------
 class ComponentPublic(BaseModel):
-    id: str
+    id: StrId
     name: str
     code: str
     category: str
@@ -94,14 +117,14 @@ class SocketUpdate(BaseModel):
 
 class SocketPublic(SocketBase):
     """Public socket view for contestants — SECRET ANSWER IS EXCLUDED!"""
-    id: str
+    id: StrId
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class SocketAdmin(SocketBase):
     """Admin socket view — includes secret answer for configuration & inspection"""
-    id: str
+    id: StrId
     accepted_component_id: str
 
     model_config = ConfigDict(from_attributes=True)
@@ -133,14 +156,14 @@ class QuestionUpdate(BaseModel):
 
 
 class QuestionPublic(QuestionBase):
-    id: str
+    id: StrId
     sockets: List[SocketPublic] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class QuestionAdmin(QuestionBase):
-    id: str
+    id: StrId
     sockets: List[SocketAdmin] = Field(default_factory=list)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -170,14 +193,14 @@ class EventUpdate(BaseModel):
 
 
 class EventPublic(EventBase):
-    id: str
+    id: StrId
     questions: List[QuestionPublic] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class EventAdmin(EventBase):
-    id: str
+    id: StrId
     questions: List[QuestionAdmin] = Field(default_factory=list)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -195,9 +218,9 @@ class SessionCreate(BaseModel):
 
 
 class SessionPublic(BaseModel):
-    id: str
+    id: StrId
     session_id: str
-    event_id: Optional[str] = None
+    event_id: OptionalStrId = None
     player_name: str
     register_number: str
     status: str
@@ -225,9 +248,9 @@ class AttemptCreate(BaseModel):
 
 
 class AttemptPublic(BaseModel):
-    id: str
+    id: StrId
     session_id: str
-    question_id: Optional[str] = None
+    question_id: OptionalStrId = None
     question_index: int
     raw_time_ms: int
     wrong_attempts: int
@@ -242,9 +265,9 @@ class AttemptPublic(BaseModel):
 # 9. TOURNAMENT RESULT SCHEMAS
 # -----------------------------------------------------------------------------
 class ResultPublic(BaseModel):
-    id: str
+    id: StrId
     session_id: str
-    event_id: Optional[str] = None
+    event_id: OptionalStrId = None
     player_name: str
     register_number: str
     total_questions: int
@@ -282,7 +305,7 @@ class AdminUserCreate(BaseModel):
 
 
 class AdminUserPublic(BaseModel):
-    id: str
+    id: StrId
     username: str
     email: str
     role: str
@@ -290,15 +313,9 @@ class AdminUserPublic(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    @field_validator("id", mode="before")
-    @classmethod
-    def ensure_id_str(cls, v: Any) -> str:
-        if v is not None:
-            return str(v)
-        return v
-
 
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: AdminUserPublic
+

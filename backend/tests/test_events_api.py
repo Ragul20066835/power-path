@@ -149,3 +149,87 @@ async def test_admin_update_and_delete_event(async_client, admin_headers, db_ses
 
     # Verify deletion
     assert db_session.query(Event).filter(Event.id == evt_id).first() is None
+
+
+@pytest.mark.anyio
+async def test_get_active_event_with_uuid_model_ids(async_client, db_session, monkeypatch):
+    """
+    Integration test: Ensure GET /api/v1/events/active returns HTTP 200 and string IDs
+    even when PostgreSQL / SQLAlchemy models have uuid.UUID objects for id attributes.
+    """
+    import uuid
+    from unittest.mock import MagicMock
+
+    evt_uuid = uuid.uuid4()
+    q_uuid = uuid.uuid4()
+    s_uuid = uuid.uuid4()
+
+    mock_socket = MagicMock()
+    mock_socket.id = s_uuid
+    mock_socket.custom_id = "S1"
+    mock_socket.label = "POWER_SOURCE"
+    mock_socket.hint = "9V Battery source"
+    mock_socket.pin_label_left = "IN"
+    mock_socket.pin_label_right = "OUT"
+    mock_socket.slot_order = 1
+    mock_socket.accepted_component_id = "battery"
+
+    mock_question = MagicMock()
+    mock_question.id = q_uuid
+    mock_question.custom_id = "Q001"
+    mock_question.name = "Stage 1 - Power Rail"
+    mock_question.description = "Connect power and ground"
+    mock_question.difficulty = "Easy"
+    mock_question.penalty_seconds = 5
+    mock_question.question_order = 1
+    mock_question.sockets = [mock_socket]
+
+    mock_event = MagicMock()
+    mock_event.id = evt_uuid
+    mock_event.custom_id = "ERR2S"
+    mock_event.name = "Active Production Round"
+    mock_event.description = "Production Tournament"
+    mock_event.status = "ACTIVE"
+    mock_event.questions = [mock_question]
+
+    orig_query = db_session.query
+
+    class MockEventQuery:
+        def filter(self, *args, **kwargs):
+            return self
+        def first(self):
+            return mock_event
+
+    def mock_query(model):
+        if model == Event:
+            return MockEventQuery()
+        return orig_query(model)
+
+    monkeypatch.setattr(db_session, "query", mock_query)
+
+    response = await async_client.get("/api/v1/events/active")
+    assert response.status_code == 200
+    data = response.json()
+
+    # 1. Verify Event ID is string UUID
+    assert data["id"] == str(evt_uuid)
+    assert isinstance(data["id"], str)
+    assert data["custom_id"] == "ERR2S"
+
+    # 2. Verify Question ID is string UUID
+    assert len(data["questions"]) == 1
+    q_data = data["questions"][0]
+    assert q_data["id"] == str(q_uuid)
+    assert isinstance(q_data["id"], str)
+    assert q_data["custom_id"] == "Q001"
+
+    # 3. Verify Socket ID is string UUID
+    assert len(q_data["sockets"]) == 1
+    s_data = q_data["sockets"][0]
+    assert s_data["id"] == str(s_uuid)
+    assert isinstance(s_data["id"], str)
+    assert s_data["custom_id"] == "S1"
+
+    # 4. Critical security: accepted_component_id is NOT exposed in public response
+    assert "accepted_component_id" not in s_data
+

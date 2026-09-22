@@ -11,6 +11,7 @@ Tests:
 - Secret answer masking in public schemas
 """
 
+import uuid
 import pytest
 from sqlalchemy.exc import IntegrityError
 from app.constants import GLOBAL_COMPONENTS, COMPONENTS_MAP, VALID_COMPONENT_IDS
@@ -24,7 +25,17 @@ from app.models import (
     TournamentSettings,
     AdminUser,
 )
-from app.schemas import SocketPublic, SocketAdmin, EventPublic
+from app.schemas import (
+    SocketPublic,
+    SocketAdmin,
+    QuestionPublic,
+    QuestionAdmin,
+    EventPublic,
+    EventAdmin,
+    SessionPublic,
+    ResultPublic,
+    AdminUserPublic,
+)
 
 
 # =============================================================================
@@ -415,3 +426,124 @@ def test_secret_answer_present_in_admin_socket_schema():
     """SocketAdmin must contain accepted_component_id for admin/scoring usage."""
     admin_fields = SocketAdmin.model_fields.keys()
     assert "accepted_component_id" in admin_fields
+
+
+# =============================================================================
+# 7. UUID PYDANTIC RESPONSE SCHEMA SERIALIZATION TESTS
+# =============================================================================
+
+def test_socket_public_with_uuid_id():
+    """Verify SocketPublic correctly converts raw uuid.UUID id to string without error."""
+    socket_uuid = uuid.uuid4()
+    socket_data = {
+        "id": socket_uuid,
+        "custom_id": "S1",
+        "label": "POWER",
+        "hint": "9V Battery",
+        "pin_label_left": "IN",
+        "pin_label_right": "OUT",
+        "slot_order": 1
+    }
+    schema = SocketPublic.model_validate(socket_data)
+    assert schema.id == str(socket_uuid)
+    assert isinstance(schema.id, str)
+    assert schema.custom_id == "S1"
+    # Ensure secret answer not present
+    assert not hasattr(schema, "accepted_component_id")
+
+
+def test_question_public_with_uuid_id_and_sockets():
+    """Verify QuestionPublic correctly converts raw uuid.UUID id and child sockets to string IDs."""
+    q_uuid = uuid.uuid4()
+    s_uuid = uuid.uuid4()
+    question_data = {
+        "id": q_uuid,
+        "custom_id": "Q001",
+        "name": "Stage 1",
+        "difficulty": "Easy",
+        "penalty_seconds": 5,
+        "question_order": 1,
+        "sockets": [
+            {
+                "id": s_uuid,
+                "custom_id": "S1",
+                "label": "POWER",
+                "hint": "9V"
+            }
+        ]
+    }
+    schema = QuestionPublic.model_validate(question_data)
+    assert schema.id == str(q_uuid)
+    assert isinstance(schema.id, str)
+    assert schema.custom_id == "Q001"
+    assert len(schema.sockets) == 1
+    assert schema.sockets[0].id == str(s_uuid)
+    assert isinstance(schema.sockets[0].id, str)
+    assert schema.sockets[0].custom_id == "S1"
+
+
+def test_event_public_with_uuid_id_and_hierarchy():
+    """Verify EventPublic correctly converts event UUID, question UUIDs, and socket UUIDs to string IDs."""
+    evt_uuid = uuid.uuid4()
+    q_uuid = uuid.uuid4()
+    s_uuid = uuid.uuid4()
+
+    event_data = {
+        "id": evt_uuid,
+        "custom_id": "ERR2S",
+        "name": "Production Championship",
+        "description": "Live production round",
+        "status": "ACTIVE",
+        "questions": [
+            {
+                "id": q_uuid,
+                "custom_id": "Q101",
+                "name": "Question 101",
+                "difficulty": "Easy",
+                "penalty_seconds": 5,
+                "question_order": 1,
+                "sockets": [
+                    {
+                        "id": s_uuid,
+                        "custom_id": "S1",
+                        "label": "POWER",
+                        "hint": "9V Battery"
+                    }
+                ]
+            }
+        ]
+    }
+    schema = EventPublic.model_validate(event_data)
+    assert schema.id == str(evt_uuid)
+    assert isinstance(schema.id, str)
+    assert schema.custom_id == "ERR2S"
+    assert len(schema.questions) == 1
+
+    q_schema = schema.questions[0]
+    assert q_schema.id == str(q_uuid)
+    assert isinstance(q_schema.id, str)
+    assert q_schema.custom_id == "Q101"
+
+    s_schema = q_schema.sockets[0]
+    assert s_schema.id == str(s_uuid)
+    assert isinstance(s_schema.id, str)
+    assert s_schema.custom_id == "S1"
+
+
+def test_admin_user_public_with_uuid_id():
+    """Verify AdminUserPublic converts raw uuid.UUID to string."""
+    from datetime import datetime, timezone
+    admin_uuid = uuid.uuid4()
+    admin_data = {
+        "id": admin_uuid,
+        "username": "superadmin",
+        "email": "superadmin@powerpath.io",
+        "role": "SUPER_ADMIN",
+        "created_at": datetime.now(timezone.utc)
+    }
+    schema = AdminUserPublic.model_validate(admin_data)
+    assert schema.id == str(admin_uuid)
+    assert isinstance(schema.id, str)
+    assert schema.username == "superadmin"
+    assert schema.role == "SUPER_ADMIN"
+

@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.database import get_db
 from app.models import (
@@ -24,6 +24,8 @@ from app.models import (
     TournamentSettings,
 )
 from app.schemas import (
+    StrId,
+    OptionalStrId,
     SessionCreate,
     SessionPublic,
     QuestionPublic,
@@ -62,7 +64,7 @@ class PlacementAttemptRequest(BaseModel):
 
 class PlacementAttemptResponse(BaseModel):
     correct: bool
-    socket_id: str
+    socket_id: StrId
     socket_custom_id: str
     already_completed: bool = False
     penalty_applied: int = 0
@@ -102,7 +104,7 @@ class SessionStateResponse(BaseModel):
     completed_at: Optional[datetime] = None
     event: Dict[str, Any]
     current_question: Optional[QuestionPublic] = None
-    placed_socket_ids: List[str] = []
+    placed_socket_ids: List[StrId] = Field(default_factory=list)
     completed_questions_count: int = 0
 
 
@@ -170,7 +172,7 @@ def start_game_session(
 
     session = ParticipantSession(
         session_id=secure_session_id,
-        event_id=event.id,
+        event_id=str(event.id) if event and event.id else None,
         player_name=session_in.player_name.strip(),
         register_number=session_in.register_number.strip().upper(),
         status=SessionStatus.PLAYING.value,
@@ -207,10 +209,10 @@ def start_game_session(
         started_at=session.started_at,
         completed_at=session.completed_at,
         event={
-            "id": event.id,
-            "custom_id": event.custom_id,
-            "name": event.name,
-            "description": event.description,
+            "id": str(event.id) if event and event.id else None,
+            "custom_id": event.custom_id if event else "UNKNOWN",
+            "name": event.name if event else "Tournament Event",
+            "description": event.description if event else "",
             "total_questions": len(questions)
         },
         current_question=QuestionPublic.model_validate(first_q),
@@ -257,7 +259,7 @@ def recover_game_session(
             SocketPlacement.session_id == session.id,
             SocketPlacement.question_id == current_q.id
         ).all()
-        placed_socket_ids = [p.socket_id for p in placements]
+        placed_socket_ids = [str(p.socket_id) for p in placements]
 
     return SessionStateResponse(
         session_id=session.session_id,
@@ -271,7 +273,7 @@ def recover_game_session(
         started_at=session.started_at,
         completed_at=session.completed_at,
         event={
-            "id": event.id if event else None,
+            "id": str(event.id) if event and event.id else None,
             "custom_id": event.custom_id if event else "UNKNOWN",
             "name": event.name if event else "Archived Event",
             "description": event.description if event else "",

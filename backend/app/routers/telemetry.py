@@ -22,6 +22,7 @@ from app.models import (
     TournamentResult,
     AdminUser,
 )
+from app.schemas import StrId, OptionalStrId
 from app.utils.auth import get_current_admin
 from app.utils.security import decode_access_token
 from app.utils.broadcaster import broadcaster
@@ -36,7 +37,7 @@ HEARTBEAT_ACTIVE_FRESHNESS_SECONDS = 45
 
 
 # -----------------------------------------------------------------------------
-# Schemas
+# Telemetry Schemas
 # -----------------------------------------------------------------------------
 
 class TelemetrySummary(BaseModel):
@@ -47,12 +48,12 @@ class TelemetrySummary(BaseModel):
 
 
 class ParticipantTelemetryItem(BaseModel):
-    id: str
+    id: StrId
     session_id: str
     player_name: str
     register_number: str
     status: str
-    event_id: Optional[str] = None
+    event_id: OptionalStrId = None
     event_name: Optional[str] = None
     current_question_index: int
     total_questions: int

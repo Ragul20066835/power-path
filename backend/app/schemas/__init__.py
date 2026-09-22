@@ -3,6 +3,8 @@ POWERPATH Pydantic Schemas Package
 """
 
 from app.schemas.base import (
+    StrId,
+    OptionalStrId,
     HealthResponse,
     ComponentPublic,
     ComponentValidationRequest,
@@ -37,6 +39,8 @@ from app.schemas.base import (
 )
 
 __all__ = [
+    "StrId",
+    "OptionalStrId",
     "HealthResponse",
     "ComponentPublic",
     "ComponentValidationRequest",

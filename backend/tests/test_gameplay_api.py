@@ -445,3 +445,109 @@ async def test_start_session_non_uuid_custom_id_never_queries_event_id(async_cli
         if "events.custom_id" in expr:
             assert "events.id" not in expr, f"Unsafe combined OR query detected: {expr}"
 
+
+@pytest.mark.anyio
+async def test_start_session_with_uuid_models_serialization(async_client, db_session, monkeypatch):
+    """
+    Integration test: Ensure POST /api/v1/game/session/start succeeds and serializes
+    Event, Question, and Socket models with raw uuid.UUID IDs to string responses.
+    """
+    import uuid
+    from unittest.mock import MagicMock
+
+    settings = TournamentSettings(key="global", event_status="OPEN", default_penalty_seconds=5)
+    db_session.merge(settings)
+    db_session.commit()
+
+    evt_uuid = uuid.uuid4()
+    q_uuid = uuid.uuid4()
+    s_uuid = uuid.uuid4()
+
+    mock_socket = MagicMock()
+    mock_socket.id = s_uuid
+    mock_socket.custom_id = "S1"
+    mock_socket.label = "POWER_SOURCE"
+    mock_socket.hint = "9V Battery"
+    mock_socket.pin_label_left = "IN"
+    mock_socket.pin_label_right = "OUT"
+    mock_socket.slot_order = 1
+    mock_socket.accepted_component_id = "battery"
+
+    mock_question = MagicMock()
+    mock_question.id = q_uuid
+    mock_question.event_id = str(evt_uuid)
+    mock_question.custom_id = "Q001"
+    mock_question.name = "Stage 1 - Main Power"
+    mock_question.description = "Connect battery"
+    mock_question.difficulty = "Easy"
+    mock_question.penalty_seconds = 5
+    mock_question.question_order = 1
+    mock_question.sockets = [mock_socket]
+
+    mock_event = MagicMock()
+    mock_event.id = evt_uuid
+    mock_event.custom_id = "ERR2S"
+    mock_event.name = "Production Grand Finals"
+    mock_event.description = "Production match"
+    mock_event.status = "ACTIVE"
+    mock_event.questions = [mock_question]
+
+    orig_query = db_session.query
+
+    class MockQueryWrapper:
+        def __init__(self, target_model):
+            self.target_model = target_model
+            self.inner = orig_query(target_model)
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            if self.target_model == Event:
+                return mock_event
+            return self.inner.first()
+
+        def all(self):
+            if self.target_model == Question:
+                return [mock_question]
+            return self.inner.all()
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+    def mock_query(model):
+        if model in (Event, Question):
+            return MockQueryWrapper(model)
+        return orig_query(model)
+
+    monkeypatch.setattr(db_session, "query", mock_query)
+
+    res = await async_client.post(
+        "/api/v1/game/session/start",
+        json={"player_name": "Championship Player", "register_number": "REG-FINALS", "event_id": "ERR2S"}
+    )
+    assert res.status_code == 201
+    data = res.json()
+
+    assert data["player_name"] == "Championship Player"
+    assert data["status"] == "PLAYING"
+    assert data["event"]["id"] == str(evt_uuid)
+    assert isinstance(data["event"]["id"], str)
+    assert data["event"]["custom_id"] == "ERR2S"
+
+    q_data = data["current_question"]
+    assert q_data is not None
+    assert q_data["id"] == str(q_uuid)
+    assert isinstance(q_data["id"], str)
+    assert q_data["custom_id"] == "Q001"
+
+    s_data = q_data["sockets"][0]
+    assert s_data["id"] == str(s_uuid)
+    assert isinstance(s_data["id"], str)
+    assert s_data["custom_id"] == "S1"
+    assert "accepted_component_id" not in s_data
+
+
