@@ -135,9 +135,18 @@ def start_game_session(
 
     # 2. Find target active event
     if session_in.event_id:
-        event = db.query(Event).filter(
-            (Event.id == session_in.event_id) | (Event.custom_id == session_in.event_id)
-        ).first()
+        event_identifier = str(session_in.event_id).strip()
+        try:
+            event_uuid = uuid.UUID(event_identifier)
+        except (ValueError, AttributeError):
+            event_uuid = None
+
+        if event_uuid is not None:
+            event = db.query(Event).filter(Event.id == str(event_uuid)).first()
+            if not event:
+                event = db.query(Event).filter(Event.custom_id == event_identifier).first()
+        else:
+            event = db.query(Event).filter(Event.custom_id == event_identifier).first()
     else:
         event = db.query(Event).filter(Event.status == EventStatus.ACTIVE.value).first()
 
@@ -302,9 +311,19 @@ def validate_component_placement(
         )
 
     # 2. Fetch and validate question
-    question = db.query(Question).filter(
-        (Question.id == attempt.question_id) | (Question.custom_id == attempt.question_id)
-    ).first()
+    q_identifier = str(attempt.question_id).strip()
+    try:
+        q_uuid = uuid.UUID(q_identifier)
+    except (ValueError, AttributeError):
+        q_uuid = None
+
+    if q_uuid is not None:
+        question = db.query(Question).filter(Question.id == str(q_uuid)).first()
+        if not question:
+            question = db.query(Question).filter(Question.custom_id == q_identifier).first()
+    else:
+        question = db.query(Question).filter(Question.custom_id == q_identifier).first()
+
     if not question or question.event_id != session.event_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -327,10 +346,27 @@ def validate_component_placement(
         )
 
     # 3. Fetch and validate socket
-    socket = db.query(Socket).filter(
-        Socket.question_id == question.id,
-        (Socket.id == attempt.socket_id) | (Socket.custom_id == attempt.socket_id)
-    ).first()
+    s_identifier = str(attempt.socket_id).strip()
+    try:
+        s_uuid = uuid.UUID(s_identifier)
+    except (ValueError, AttributeError):
+        s_uuid = None
+
+    if s_uuid is not None:
+        socket = db.query(Socket).filter(
+            Socket.question_id == question.id,
+            Socket.id == str(s_uuid)
+        ).first()
+        if not socket:
+            socket = db.query(Socket).filter(
+                Socket.question_id == question.id,
+                Socket.custom_id == s_identifier
+            ).first()
+    else:
+        socket = db.query(Socket).filter(
+            Socket.question_id == question.id,
+            Socket.custom_id == s_identifier
+        ).first()
     if not socket:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

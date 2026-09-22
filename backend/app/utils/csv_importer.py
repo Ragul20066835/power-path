@@ -7,6 +7,7 @@ Rolls back completely if any row fails validation.
 import csv
 import io
 import re
+import uuid
 from typing import List, Dict, Any, Tuple, Optional
 from sqlalchemy.orm import Session
 from app.models import Event, Question, Socket
@@ -125,9 +126,18 @@ def import_questions_csv(
     Transactional: Rollback completely if any error.
     """
     # Verify target event exists
-    event = db.query(Event).filter(
-        (Event.id == target_event_id) | (Event.custom_id == target_event_id)
-    ).first()
+    event_identifier = str(target_event_id).strip()
+    try:
+        event_uuid = uuid.UUID(event_identifier)
+    except (ValueError, AttributeError):
+        event_uuid = None
+
+    if event_uuid is not None:
+        event = db.query(Event).filter(Event.id == str(event_uuid)).first()
+        if not event:
+            event = db.query(Event).filter(Event.custom_id == event_identifier).first()
+    else:
+        event = db.query(Event).filter(Event.custom_id == event_identifier).first()
 
     if not event:
         raise CSVValidationError([{

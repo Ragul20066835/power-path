@@ -3,6 +3,7 @@ POWERPATH Events Router
 Public Active Event API and Admin Event CRUD/Lifecycle.
 """
 
+import uuid
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -18,6 +19,22 @@ from app.utils.auth import get_current_admin
 from app.constants import EventStatus
 
 router = APIRouter(tags=["Events"])
+
+
+def find_event_by_id_or_custom_id(db: Session, event_id: str) -> Optional[Event]:
+    """Safely lookup Event by UUID or custom_id without invalid UUID cast errors."""
+    event_identifier = str(event_id).strip()
+    try:
+        event_uuid = uuid.UUID(event_identifier)
+    except (ValueError, AttributeError):
+        event_uuid = None
+
+    if event_uuid is not None:
+        event = db.query(Event).filter(Event.id == str(event_uuid)).first()
+        if not event:
+            event = db.query(Event).filter(Event.custom_id == event_identifier).first()
+        return event
+    return db.query(Event).filter(Event.custom_id == event_identifier).first()
 
 
 # =============================================================================
@@ -125,7 +142,7 @@ def update_admin_event(
     db: Session = Depends(get_db)
 ):
     """Update event metadata."""
-    event = db.query(Event).filter((Event.id == event_id) | (Event.custom_id == event_id)).first()
+    event = find_event_by_id_or_custom_id(db, event_id)
     if not event:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -167,7 +184,7 @@ def delete_admin_event(
     Delete an event blueprint.
     Cascades to questions and sockets. Preserves historical session and results records.
     """
-    event = db.query(Event).filter((Event.id == event_id) | (Event.custom_id == event_id)).first()
+    event = find_event_by_id_or_custom_id(db, event_id)
     if not event:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -189,7 +206,7 @@ def activate_event(
     Atomically activate target event.
     Deactivates any previously active event to enforce the single active event rule.
     """
-    event = db.query(Event).filter((Event.id == event_id) | (Event.custom_id == event_id)).first()
+    event = find_event_by_id_or_custom_id(db, event_id)
     if not event:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -211,7 +228,7 @@ def deactivate_event(
     db: Session = Depends(get_db)
 ):
     """Deactivate target event."""
-    event = db.query(Event).filter((Event.id == event_id) | (Event.custom_id == event_id)).first()
+    event = find_event_by_id_or_custom_id(db, event_id)
     if not event:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

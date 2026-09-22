@@ -4,6 +4,7 @@ Provides lightweight player telemetry streaming, heartbeat tracking,
 abandoned session detection, and WebSocket broadcasting.
 """
 
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
@@ -145,13 +146,27 @@ def get_live_telemetry(
     query = db.query(ParticipantSession)
 
     if event_id:
-        target_evt = db.query(Event).filter(
-            (Event.id == event_id) | (Event.custom_id == event_id)
-        ).first()
+        event_identifier = str(event_id).strip()
+        try:
+            event_uuid = uuid.UUID(event_identifier)
+        except (ValueError, AttributeError):
+            event_uuid = None
+
+        if event_uuid is not None:
+            target_evt = db.query(Event).filter(Event.id == str(event_uuid)).first()
+            if not target_evt:
+                target_evt = db.query(Event).filter(Event.custom_id == event_identifier).first()
+        else:
+            target_evt = db.query(Event).filter(Event.custom_id == event_identifier).first()
+
         if target_evt:
             query = query.filter(ParticipantSession.event_id == target_evt.id)
         else:
-            query = query.filter(ParticipantSession.event_id == event_id)
+            try:
+                valid_uuid = str(uuid.UUID(str(event_id).strip()))
+                query = query.filter(ParticipantSession.event_id == valid_uuid)
+            except (ValueError, AttributeError):
+                query = query.filter(False)
 
     # Compute total counters
     all_sessions_for_counts = query.all()

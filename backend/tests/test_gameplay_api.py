@@ -307,3 +307,141 @@ async def test_full_game_lifecycle_to_finish(async_client, active_gameplay_event
     )
     assert finish_res_2.status_code == 200
     assert finish_res_2.json()["id"] == result_data["id"]
+
+
+@pytest.mark.anyio
+async def test_start_session_with_custom_event_id_err2s(async_client, db_session):
+    """Regression test 6a: start session using a valid custom event ID such as 'ERR2S'."""
+    settings = TournamentSettings(key="global", event_status="OPEN", default_penalty_seconds=5)
+    db_session.merge(settings)
+
+    event = Event(
+        custom_id="ERR2S",
+        name="Production Active Event",
+        description="Event with custom_id ERR2S",
+        status="ACTIVE"
+    )
+    db_session.add(event)
+    db_session.flush()
+
+    q1 = Question(
+        event_id=event.id,
+        custom_id="Q1",
+        name="Question 1",
+        difficulty="Easy",
+        penalty_seconds=5,
+        question_order=1
+    )
+    db_session.add(q1)
+    db_session.flush()
+
+    s1 = Socket(question_id=q1.id, custom_id="S1", label="POWER", accepted_component_id="battery", hint="9V Source")
+    db_session.add(s1)
+    db_session.commit()
+
+    res = await async_client.post(
+        "/api/v1/game/session/start",
+        json={"player_name": "Alex Vance", "register_number": "REG-ERR2S", "event_id": "ERR2S"}
+    )
+    assert res.status_code == 201
+    data = res.json()
+    assert data["player_name"] == "Alex Vance"
+    assert data["status"] == "PLAYING"
+    assert data["current_question"]["custom_id"] == "Q1"
+
+
+@pytest.mark.anyio
+async def test_start_session_with_uuid_event_id(async_client, db_session):
+    """Regression test 6b: start session using a UUID event ID."""
+    settings = TournamentSettings(key="global", event_status="OPEN", default_penalty_seconds=5)
+    db_session.merge(settings)
+
+    event = Event(
+        custom_id="EVT_UUID_TEST",
+        name="UUID Test Event",
+        description="Event lookup by UUID",
+        status="ACTIVE"
+    )
+    db_session.add(event)
+    db_session.flush()
+
+    q1 = Question(
+        event_id=event.id,
+        custom_id="Q100",
+        name="Question 100",
+        difficulty="Easy",
+        penalty_seconds=5,
+        question_order=1
+    )
+    db_session.add(q1)
+    db_session.flush()
+
+    s1 = Socket(question_id=q1.id, custom_id="S1", label="POWER", accepted_component_id="battery", hint="9V Source")
+    db_session.add(s1)
+    db_session.commit()
+
+    res = await async_client.post(
+        "/api/v1/game/session/start",
+        json={"player_name": "Gordon Freeman", "register_number": "REG-UUID", "event_id": event.id}
+    )
+    assert res.status_code == 201
+    data = res.json()
+    assert data["player_name"] == "Gordon Freeman"
+    assert data["status"] == "PLAYING"
+
+
+@pytest.mark.anyio
+async def test_start_session_non_uuid_custom_id_never_queries_event_id(async_client, db_session, monkeypatch):
+    """Regression test 7: prove that a non-UUID custom_id ('ERR2S') never reaches Event.id comparison."""
+    settings = TournamentSettings(key="global", event_status="OPEN", default_penalty_seconds=5)
+    db_session.merge(settings)
+
+    event = Event(
+        custom_id="ERR2S",
+        name="Custom ID Test Event",
+        description="Ensures Event.id is never compared against non-UUID",
+        status="ACTIVE"
+    )
+    db_session.add(event)
+    db_session.flush()
+
+    q1 = Question(
+        event_id=event.id,
+        custom_id="Q1",
+        name="Stage 1",
+        difficulty="Easy",
+        penalty_seconds=5,
+        question_order=1
+    )
+    db_session.add(q1)
+    db_session.flush()
+    db_session.add(Socket(question_id=q1.id, custom_id="S1", label="POWER", accepted_component_id="battery"))
+    db_session.commit()
+
+    queried_expressions = []
+    from sqlalchemy.orm import Query
+    orig_query_filter = Query.filter
+
+    def tracking_filter(self, *criterion):
+        for crit in criterion:
+            crit_str = str(crit)
+            queried_expressions.append(crit_str)
+            if "events.id" in crit_str and "events.custom_id" in crit_str:
+                raise AssertionError(f"Unsafe combined OR query detected on Event: {crit_str}")
+        return orig_query_filter(self, *criterion)
+
+    monkeypatch.setattr(Query, "filter", tracking_filter)
+
+    res = await async_client.post(
+        "/api/v1/game/session/start",
+        json={"player_name": "Alyx Vance", "register_number": "REG-TEST", "event_id": "ERR2S"}
+    )
+    assert res.status_code == 201
+
+    event_custom_id_queried = any("events.custom_id" in expr for expr in queried_expressions)
+    assert event_custom_id_queried is True
+
+    for expr in queried_expressions:
+        if "events.custom_id" in expr:
+            assert "events.id" not in expr, f"Unsafe combined OR query detected: {expr}"
+

@@ -3,6 +3,7 @@ POWERPATH Questions & Sockets Management Router (Admin)
 Handles Question stages and socket PCB layouts within Events.
 """
 
+import uuid
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -21,7 +22,19 @@ router = APIRouter(prefix="/admin/events/{event_id}/questions", tags=["Admin Que
 
 
 def get_target_event(event_id: str, db: Session) -> Event:
-    event = db.query(Event).filter((Event.id == event_id) | (Event.custom_id == event_id)).first()
+    event_identifier = str(event_id).strip()
+    try:
+        event_uuid = uuid.UUID(event_identifier)
+    except (ValueError, AttributeError):
+        event_uuid = None
+
+    if event_uuid is not None:
+        event = db.query(Event).filter(Event.id == str(event_uuid)).first()
+        if not event:
+            event = db.query(Event).filter(Event.custom_id == event_identifier).first()
+    else:
+        event = db.query(Event).filter(Event.custom_id == event_identifier).first()
+
     if not event:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -127,10 +140,27 @@ def update_question(
 ):
     """Update question metadata."""
     event = get_target_event(event_id, db)
-    question = db.query(Question).filter(
-        Question.event_id == event.id,
-        (Question.id == question_id) | (Question.custom_id == question_id)
-    ).first()
+    q_identifier = str(question_id).strip()
+    try:
+        q_uuid = uuid.UUID(q_identifier)
+    except (ValueError, AttributeError):
+        q_uuid = None
+
+    if q_uuid is not None:
+        question = db.query(Question).filter(
+            Question.event_id == event.id,
+            Question.id == str(q_uuid)
+        ).first()
+        if not question:
+            question = db.query(Question).filter(
+                Question.event_id == event.id,
+                Question.custom_id == q_identifier
+            ).first()
+    else:
+        question = db.query(Question).filter(
+            Question.event_id == event.id,
+            Question.custom_id == q_identifier
+        ).first()
 
     if not question:
         raise HTTPException(
@@ -175,10 +205,27 @@ def delete_question(
 ):
     """Delete a question and its child sockets."""
     event = get_target_event(event_id, db)
-    question = db.query(Question).filter(
-        Question.event_id == event.id,
-        (Question.id == question_id) | (Question.custom_id == question_id)
-    ).first()
+    q_identifier = str(question_id).strip()
+    try:
+        q_uuid = uuid.UUID(q_identifier)
+    except (ValueError, AttributeError):
+        q_uuid = None
+
+    if q_uuid is not None:
+        question = db.query(Question).filter(
+            Question.event_id == event.id,
+            Question.id == str(q_uuid)
+        ).first()
+        if not question:
+            question = db.query(Question).filter(
+                Question.event_id == event.id,
+                Question.custom_id == q_identifier
+            ).first()
+    else:
+        question = db.query(Question).filter(
+            Question.event_id == event.id,
+            Question.custom_id == q_identifier
+        ).first()
 
     if not question:
         raise HTTPException(

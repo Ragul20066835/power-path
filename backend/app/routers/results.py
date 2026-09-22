@@ -3,6 +3,7 @@ POWERPATH Results & Leaderboard Router
 Provides official ranked standings and stage telemetry.
 """
 
+import uuid
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -13,6 +14,22 @@ from app.utils.auth import get_current_admin
 from app.constants import EventStatus
 
 router = APIRouter(tags=["Results & Leaderboard"])
+
+
+def find_event_by_id_or_custom_id(db: Session, event_id: str) -> Optional[Event]:
+    """Safely lookup Event by UUID or custom_id without invalid UUID cast errors."""
+    event_identifier = str(event_id).strip()
+    try:
+        event_uuid = uuid.UUID(event_identifier)
+    except (ValueError, AttributeError):
+        event_uuid = None
+
+    if event_uuid is not None:
+        event = db.query(Event).filter(Event.id == str(event_uuid)).first()
+        if not event:
+            event = db.query(Event).filter(Event.custom_id == event_identifier).first()
+        return event
+    return db.query(Event).filter(Event.custom_id == event_identifier).first()
 
 
 @router.get("/admin/results", response_model=List[ResultPublic])
@@ -26,13 +43,15 @@ def list_admin_results(
     """
     query = db.query(TournamentResult)
     if event_id:
-        target_event = db.query(Event).filter(
-            (Event.id == event_id) | (Event.custom_id == event_id)
-        ).first()
+        target_event = find_event_by_id_or_custom_id(db, event_id)
         if target_event:
             query = query.filter(TournamentResult.event_id == target_event.id)
         else:
-            query = query.filter(TournamentResult.event_id == event_id)
+            try:
+                valid_uuid = str(uuid.UUID(str(event_id).strip()))
+                query = query.filter(TournamentResult.event_id == valid_uuid)
+            except (ValueError, AttributeError):
+                query = query.filter(False)
 
     results = query.order_by(
         TournamentResult.final_time_ms.asc(),
@@ -53,13 +72,15 @@ def get_public_leaderboard(
     query = db.query(TournamentResult)
 
     if event_id:
-        target_event = db.query(Event).filter(
-            (Event.id == event_id) | (Event.custom_id == event_id)
-        ).first()
+        target_event = find_event_by_id_or_custom_id(db, event_id)
         if target_event:
             query = query.filter(TournamentResult.event_id == target_event.id)
         else:
-            query = query.filter(TournamentResult.event_id == event_id)
+            try:
+                valid_uuid = str(uuid.UUID(str(event_id).strip()))
+                query = query.filter(TournamentResult.event_id == valid_uuid)
+            except (ValueError, AttributeError):
+                query = query.filter(False)
     else:
         # Default to active event
         active_event = db.query(Event).filter(Event.status == EventStatus.ACTIVE.value).first()
