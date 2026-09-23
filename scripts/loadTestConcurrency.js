@@ -7,6 +7,14 @@
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:8000';
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'AdminPassword123!';
+const LOAD_TEST_RAMP_MS = Number.isFinite(Number(process.env.LOAD_TEST_RAMP_MS))
+  ? Math.max(0, Number(process.env.LOAD_TEST_RAMP_MS))
+  : 10000;
+const LOAD_TEST_JITTER_MS = Number.isFinite(Number(process.env.LOAD_TEST_JITTER_MS))
+  ? Math.max(0, Number(process.env.LOAD_TEST_JITTER_MS))
+  : 300;
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Production Safety Guard: prevent accidental execution against remote URLs
 function checkProductionSafety() {
@@ -382,14 +390,26 @@ async function simulatePlayer(playerIndex, eventId, metrics, batchPrefix = 'LOAD
   return sessionLog;
 }
 
-// Executes a concurrent batch of N players
+// Executes a concurrent batch of N players with configured ramp-up and jitter
 async function runConcurrentBatch(playerCount, eventId, testName, batchPrefix = 'LOAD') {
   const metrics = new MetricsCollector(testName);
   metrics.start();
 
   const promises = [];
   for (let i = 1; i <= playerCount; i++) {
-    promises.push(simulatePlayer(i, eventId, metrics, batchPrefix));
+    // Calculate staggered dispatch delay across LOAD_TEST_RAMP_MS with random jitter
+    const baseDelay = playerCount > 1 ? ((i - 1) / (playerCount - 1)) * LOAD_TEST_RAMP_MS : 0;
+    const jitter = LOAD_TEST_JITTER_MS > 0 ? Math.floor(Math.random() * (LOAD_TEST_JITTER_MS + 1)) : 0;
+    const dispatchDelayMs = Math.round(baseDelay + jitter);
+
+    promises.push(
+      (async () => {
+        if (dispatchDelayMs > 0) {
+          await sleep(dispatchDelayMs);
+        }
+        return simulatePlayer(i, eventId, metrics, batchPrefix);
+      })()
+    );
   }
 
   const results = await Promise.all(promises);
@@ -635,6 +655,7 @@ async function runPhase5MasterLoadSuite() {
   console.log('================================================================');
   console.log('⚡ POWERPATH PHASE 5 HIGH-CONCURRENCY & LOAD TEST SUITE ⚡');
   console.log(`Target BASE_URL: ${BASE_URL}`);
+  console.log(`Ramp-up Window: ${LOAD_TEST_RAMP_MS}ms | Max Jitter: ${LOAD_TEST_JITTER_MS}ms`);
   console.log('================================================================\n');
 
   let testEventContext = null;
