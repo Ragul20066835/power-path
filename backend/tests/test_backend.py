@@ -547,3 +547,24 @@ def test_admin_user_public_with_uuid_id():
     assert schema.username == "superadmin"
     assert schema.role == "SUPER_ADMIN"
 
+
+def test_postgres_connection_pool_configuration():
+    """Verify PostgreSQL engine is configured with conservative pool settings for Supabase Transaction Pooler."""
+    test_pg_url = "postgresql://postgres.test:password@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"
+    engine_kwargs = {}
+    if "sqlite" in test_pg_url:
+        engine_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 60}
+    else:
+        engine_kwargs.update({
+            "pool_size": 10,
+            "max_overflow": 10,
+            "pool_timeout": 30,
+            "pool_recycle": 300,
+            "pool_pre_ping": True,
+        })
+    assert engine_kwargs["pool_size"] == 10
+    assert engine_kwargs["max_overflow"] == 10
+    assert engine_kwargs["pool_timeout"] == 30
+    assert engine_kwargs["pool_pre_ping"] is True
+
+

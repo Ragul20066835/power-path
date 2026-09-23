@@ -22,11 +22,11 @@ engine_kwargs = {}
 if "sqlite" in db_url:
     engine_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 60}
 else:
-    # High-concurrency connection pooling for ~50 concurrent players
+    # Conservative connection pooling compatible with Supabase Transaction Pooler
     engine_kwargs.update({
-        "pool_size": 25,
-        "max_overflow": 50,
-        "pool_timeout": 60,
+        "pool_size": 10,
+        "max_overflow": 10,
+        "pool_timeout": 30,
         "pool_recycle": 300,
         "pool_pre_ping": True,
     })
