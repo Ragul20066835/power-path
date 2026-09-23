@@ -35,6 +35,7 @@ from app.schemas import (
 from app.constants import SessionStatus, TournamentGate, EventStatus
 from app.utils.csv_importer import normalize_component_name
 from app.utils.broadcaster import broadcaster
+from app.utils.event_resolver import resolve_event_identifier
 
 router = APIRouter(prefix="/game", tags=["Game Engine"])
 
@@ -137,18 +138,7 @@ def start_game_session(
 
     # 2. Find target active event
     if session_in.event_id:
-        event_identifier = str(session_in.event_id).strip()
-        try:
-            event_uuid = uuid.UUID(event_identifier)
-        except (ValueError, AttributeError):
-            event_uuid = None
-
-        if event_uuid is not None:
-            event = db.query(Event).filter(Event.id == str(event_uuid)).first()
-            if not event:
-                event = db.query(Event).filter(Event.custom_id == event_identifier).first()
-        else:
-            event = db.query(Event).filter(Event.custom_id == event_identifier).first()
+        event = resolve_event_identifier(db, session_in.event_id)
     else:
         event = db.query(Event).filter(Event.status == EventStatus.ACTIVE.value).first()
 

@@ -26,6 +26,7 @@ from app.schemas import StrId, OptionalStrId
 from app.utils.auth import get_current_admin
 from app.utils.security import decode_access_token
 from app.utils.broadcaster import broadcaster
+from app.utils.event_resolver import resolve_event_identifier
 from app.constants import SessionStatus
 
 router = APIRouter(tags=["Live Monitor & Telemetry"])
@@ -147,27 +148,11 @@ def get_live_telemetry(
     query = db.query(ParticipantSession)
 
     if event_id:
-        event_identifier = str(event_id).strip()
-        try:
-            event_uuid = uuid.UUID(event_identifier)
-        except (ValueError, AttributeError):
-            event_uuid = None
-
-        if event_uuid is not None:
-            target_evt = db.query(Event).filter(Event.id == str(event_uuid)).first()
-            if not target_evt:
-                target_evt = db.query(Event).filter(Event.custom_id == event_identifier).first()
-        else:
-            target_evt = db.query(Event).filter(Event.custom_id == event_identifier).first()
-
+        target_evt = resolve_event_identifier(db, event_id)
         if target_evt:
             query = query.filter(ParticipantSession.event_id == target_evt.id)
         else:
-            try:
-                valid_uuid = str(uuid.UUID(str(event_id).strip()))
-                query = query.filter(ParticipantSession.event_id == valid_uuid)
-            except (ValueError, AttributeError):
-                query = query.filter(False)
+            query = query.filter(False)
 
     # Compute total counters
     all_sessions_for_counts = query.all()

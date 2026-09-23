@@ -15,6 +15,7 @@ from app.schemas import (
     QuestionUpdate,
 )
 from app.utils.auth import get_current_admin
+from app.utils.event_resolver import resolve_event_identifier
 from app.constants import VALID_COMPONENT_IDS
 from app.utils.csv_importer import normalize_component_name
 
@@ -22,19 +23,7 @@ router = APIRouter(prefix="/admin/events/{event_id}/questions", tags=["Admin Que
 
 
 def get_target_event(event_id: str, db: Session) -> Event:
-    event_identifier = str(event_id).strip()
-    try:
-        event_uuid = uuid.UUID(event_identifier)
-    except (ValueError, AttributeError):
-        event_uuid = None
-
-    if event_uuid is not None:
-        event = db.query(Event).filter(Event.id == str(event_uuid)).first()
-        if not event:
-            event = db.query(Event).filter(Event.custom_id == event_identifier).first()
-    else:
-        event = db.query(Event).filter(Event.custom_id == event_identifier).first()
-
+    event = resolve_event_identifier(db, event_id)
     if not event:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

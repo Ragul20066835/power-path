@@ -14,6 +14,7 @@ from app.utils.auth import (
     seed_initial_admin,
     oauth2_scheme,
 )
+from app.utils.event_resolver import resolve_event_identifier
 
 __all__ = [
     "verify_password",
@@ -24,4 +25,5 @@ __all__ = [
     "get_current_super_admin",
     "seed_initial_admin",
     "oauth2_scheme",
+    "resolve_event_identifier",
 ]

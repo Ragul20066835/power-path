@@ -81,7 +81,7 @@ export function EventUpload({ onImportSuccess, onCancel }) {
 
   const handleConfirmImport = () => {
     if (!validationResult || !validationResult.isValid) return;
-    onImportSuccess(validationResult.events);
+    onImportSuccess(validationResult.events, selectedFile);
     setShowPreviewModal(false);
   };
 

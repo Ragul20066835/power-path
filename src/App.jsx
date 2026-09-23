@@ -688,8 +688,19 @@ export function App() {
     showToast('Stages Reordered', 'Question sequence updated.', 'info', 2000);
   };
 
-  const handleImportQuestionsInEvent = (eventId, newQuestions) => {
+  const handleImportQuestionsInEvent = async (eventId, newQuestions, file) => {
     try {
+      if (apiService.getAdminToken() && file) {
+        await apiService.uploadQuestionsCSV(file, eventId);
+        await refreshAdminData();
+        showToast(
+          'Questions Imported',
+          `Questions and sockets imported successfully into Event ${eventId}.`,
+          'success',
+          3500
+        );
+        return;
+      }
       importQuestionsIntoEvent(eventId, newQuestions);
       refreshAdminData();
       showToast(
@@ -703,15 +714,30 @@ export function App() {
     }
   };
 
-  const handleImportEvents = (importedList) => {
-    importEventsData(importedList);
-    refreshAdminData();
-    showToast(
-      'Bulk Import Successful',
-      `Imported ${importedList.length} event(s) into database.`,
-      'success',
-      4000
-    );
+  const handleImportEvents = async (importedList, file) => {
+    try {
+      if (apiService.getAdminToken() && file) {
+        await apiService.uploadEventsCSV(file);
+        await refreshAdminData();
+        showToast(
+          'Bulk Import Successful',
+          `Events, questions, and sockets imported successfully into database.`,
+          'success',
+          4000
+        );
+        return;
+      }
+      importEventsData(importedList);
+      refreshAdminData();
+      showToast(
+        'Bulk Import Successful',
+        `Imported ${importedList.length} event(s) into database.`,
+        'success',
+        4000
+      );
+    } catch (e) {
+      showToast('Import Error', e.message, 'error', 4000);
+    }
   };
 
   const handleSaveSettings = async (newSettings) => {

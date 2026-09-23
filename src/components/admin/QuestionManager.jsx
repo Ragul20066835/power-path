@@ -38,7 +38,7 @@ export function QuestionManager({
   onReorderQuestions,
   onImportQuestions
 }) {
-  const currentEvent = events.find((e) => e.id === selectedEventId) || events[0] || null;
+  const currentEvent = events.find((e) => e.id === selectedEventId || e.customId === selectedEventId || e.custom_id === selectedEventId) || events[0] || null;
   const questions = currentEvent?.questions || [];
 
   const [editingQuestion, setEditingQuestion] = useState(null); // null or question object
@@ -238,7 +238,7 @@ export function QuestionManager({
   const handleConfirmQuestionImport = () => {
     if (!uploadResult || !uploadResult.isValid || !currentEvent) return;
     if (onImportQuestions) {
-      onImportQuestions(currentEvent.id, uploadResult.questions);
+      onImportQuestions(currentEvent.id, uploadResult.questions, uploadFile);
     }
     setIsUploadModalOpen(false);
   };

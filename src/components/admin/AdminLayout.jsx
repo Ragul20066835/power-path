@@ -53,11 +53,11 @@ export function AdminLayout({
 }) {
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'events' | 'event-editor' | 'questions' | 'upload' | 'participants' | 'live' | 'results' | 'settings'
   const [editingEvent, setEditingEvent] = useState(null);
-  const [selectedEventIdForQuestions, setSelectedEventIdForQuestions] = useState(activeEvent?.id || events[0]?.id || 'E001');
+  const [selectedEventIdForQuestions, setSelectedEventIdForQuestions] = useState(activeEvent?.id || events[0]?.id || '');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   // Guard: if the selected event was deleted or doesn't exist, fallback to first available
-  const effectiveEventIdForQuestions = events.some((e) => e.id === selectedEventIdForQuestions)
+  const effectiveEventIdForQuestions = events.some((e) => e.id === selectedEventIdForQuestions || e.customId === selectedEventIdForQuestions || e.custom_id === selectedEventIdForQuestions)
     ? selectedEventIdForQuestions
     : (activeEvent?.id || events[0]?.id || '');
 
@@ -87,8 +87,8 @@ export function AdminLayout({
     setActiveTab('questions');
   };
 
-  const handleImportSuccess = (importedEvents) => {
-    onImportEvents(importedEvents);
+  const handleImportSuccess = (importedEvents, file) => {
+    onImportEvents(importedEvents, file);
     setActiveTab('events');
   };
 

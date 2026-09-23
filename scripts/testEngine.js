@@ -661,6 +661,63 @@ const q001 = e001.questions[0];
   assert(dupGnd.reason === 'COMPONENT_ALREADY_USED', 'TEST 16.6: Reason is COMPONENT_ALREADY_USED');
 }
 
+// TEST 17: Multi-Identifier Event Lookup & Questions Import (UUID & customId support)
+{
+  const backendEvent = {
+    id: '3af75c45-336d-44e0-8d9f-e9a60eae1448',
+    customId: 'ERR2S',
+    name: 'electrox',
+    status: 'ACTIVE',
+    questions: [
+      {
+        id: 'Q001',
+        name: 'Stage 1',
+        slots: [{ id: 'S1', label: 'PWR', acceptedComponentId: 'battery' }]
+      }
+    ]
+  };
+
+  saveEvent(backendEvent);
+
+  // 1. Lookup by UUID primary id
+  const byUuid = getEventById('3af75c45-336d-44e0-8d9f-e9a60eae1448');
+  assert(byUuid !== null, 'TEST 17.1: getEventById with UUID resolves event');
+  assert(byUuid.name === 'electrox', 'TEST 17.2: Resolved event name is electrox');
+
+  // 2. Lookup by customId
+  const byCustomId = getEventById('ERR2S');
+  assert(byCustomId !== null, 'TEST 17.3: getEventById with customId resolves event');
+  assert(byCustomId.id === '3af75c45-336d-44e0-8d9f-e9a60eae1448', 'TEST 17.4: Resolved event ID is UUID');
+
+  // 3. Import Questions using UUID
+  const newQuestions = [
+    {
+      id: 'Q002',
+      name: 'Stage 2',
+      slots: [{ id: 'S1', label: 'SWITCH', acceptedComponentId: 'switch' }]
+    }
+  ];
+
+  const updated = importQuestionsIntoEvent('3af75c45-336d-44e0-8d9f-e9a60eae1448', newQuestions);
+  assert(updated.questions.length === 2, 'TEST 17.5: Questions imported into UUID event');
+  assert(updated.id === '3af75c45-336d-44e0-8d9f-e9a60eae1448', 'TEST 17.6: Target event ID remains UUID');
+
+  // 4. Import Questions using customId
+  const newQuestions2 = [
+    {
+      id: 'Q003',
+      name: 'Stage 3',
+      slots: [{ id: 'S1', label: 'LED', acceptedComponentId: 'led' }]
+    }
+  ];
+  const updated2 = importQuestionsIntoEvent('ERR2S', newQuestions2);
+  assert(updated2.questions.length === 3, 'TEST 17.7: Questions imported into customId ERR2S');
+
+  // Cleanup
+  deleteEvent('3af75c45-336d-44e0-8d9f-e9a60eae1448');
+  assert(getEventById('ERR2S') === null, 'TEST 17.8: Event cleanly removed');
+}
+
 console.log(`\n======================================================`);
 console.log(`TEST RESULTS: ${passedTests} / ${totalTests} TESTS PASSED`);
 console.log(`======================================================\n`);
@@ -670,4 +727,5 @@ if (passedTests === totalTests) {
 } else {
   process.exit(1);
 }
+
 

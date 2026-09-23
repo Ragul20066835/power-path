@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Tuple, Optional
 from sqlalchemy.orm import Session
 from app.models import Event, Question, Socket
 from app.constants import VALID_COMPONENT_IDS, COMPONENTS_MAP
+from app.utils.event_resolver import resolve_event_identifier
 
 # Component Normalization Mapping
 NORMALIZATION_MAP = {
@@ -125,25 +126,14 @@ def import_questions_csv(
     Imports Question-only CSV into an existing Event.
     Transactional: Rollback completely if any error.
     """
-    # Verify target event exists
-    event_identifier = str(target_event_id).strip()
-    try:
-        event_uuid = uuid.UUID(event_identifier)
-    except (ValueError, AttributeError):
-        event_uuid = None
-
-    if event_uuid is not None:
-        event = db.query(Event).filter(Event.id == str(event_uuid)).first()
-        if not event:
-            event = db.query(Event).filter(Event.custom_id == event_identifier).first()
-    else:
-        event = db.query(Event).filter(Event.custom_id == event_identifier).first()
+    # Verify target event exists using centralized event resolver
+    event = resolve_event_identifier(db, target_event_id)
 
     if not event:
         raise CSVValidationError([{
             "row": 0,
             "field": "event_id",
-            "value": target_event_id,
+            "value": str(target_event_id),
             "message": f"Target Event '{target_event_id}' not found."
         }])
 
@@ -405,7 +395,7 @@ def import_events_csv(file_content: str, db: Session) -> Dict[str, Any]:
 
     try:
         for e_id, e_data in events_map.items():
-            event = db.query(Event).filter(Event.custom_id == e_id).first()
+            event = resolve_event_identifier(db, e_id)
             if not event:
                 event = Event(
                     custom_id=e_data["custom_id"],

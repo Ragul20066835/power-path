@@ -16,6 +16,7 @@ from app.schemas import (
     EventUpdate,
 )
 from app.utils.auth import get_current_admin
+from app.utils.event_resolver import resolve_event_identifier
 from app.constants import EventStatus
 
 router = APIRouter(tags=["Events"])
@@ -23,18 +24,7 @@ router = APIRouter(tags=["Events"])
 
 def find_event_by_id_or_custom_id(db: Session, event_id: str) -> Optional[Event]:
     """Safely lookup Event by UUID or custom_id without invalid UUID cast errors."""
-    event_identifier = str(event_id).strip()
-    try:
-        event_uuid = uuid.UUID(event_identifier)
-    except (ValueError, AttributeError):
-        event_uuid = None
-
-    if event_uuid is not None:
-        event = db.query(Event).filter(Event.id == str(event_uuid)).first()
-        if not event:
-            event = db.query(Event).filter(Event.custom_id == event_identifier).first()
-        return event
-    return db.query(Event).filter(Event.custom_id == event_identifier).first()
+    return resolve_event_identifier(db, event_id)
 
 
 # =============================================================================

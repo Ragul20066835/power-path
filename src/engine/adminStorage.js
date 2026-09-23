@@ -55,8 +55,9 @@ export function saveEvents(eventsList) {
 }
 
 export function getEventById(id) {
+  if (!id) return null;
   const events = getEvents();
-  return events.find((e) => e.id === id) || null;
+  return events.find((e) => e.id === id || e.customId === id || e.custom_id === id) || null;
 }
 
 export function getActiveEvent() {
@@ -71,7 +72,9 @@ export function getActiveEvent() {
 
 export function saveEvent(event) {
   const events = getEvents();
-  const index = events.findIndex((e) => e.id === event.id);
+  const index = events.findIndex(
+    (e) => e.id === event.id || (event.customId && (e.customId === event.customId || e.id === event.customId)) || (event.custom_id && (e.custom_id === event.custom_id || e.id === event.custom_id))
+  );
 
   const now = new Date().toISOString();
   const updatedEvent = {
@@ -103,16 +106,17 @@ export function saveEvent(event) {
 
 export function activateEvent(eventId) {
   const events = getEvents();
-  const target = events.find((e) => e.id === eventId);
+  const target = events.find((e) => e.id === eventId || e.customId === eventId || e.custom_id === eventId);
   if (!target) return false;
 
   if (!target.questions || target.questions.length === 0) {
     throw new Error(`Event ${eventId} cannot be activated because it contains 0 questions.`);
   }
 
+  const targetId = target.id;
   const nextList = events.map((e) => ({
     ...e,
-    status: e.id === eventId ? 'ACTIVE' : 'INACTIVE',
+    status: (e.id === targetId || e.customId === targetId || e.custom_id === targetId) ? 'ACTIVE' : 'INACTIVE',
     updatedAt: new Date().toISOString()
   }));
 
@@ -123,7 +127,7 @@ export function activateEvent(eventId) {
 export function deactivateEvent(eventId) {
   const events = getEvents();
   const nextList = events.map((e) => {
-    if (e.id === eventId) {
+    if (e.id === eventId || e.customId === eventId || e.custom_id === eventId) {
       return { ...e, status: 'INACTIVE', updatedAt: new Date().toISOString() };
     }
     return e;
@@ -157,11 +161,12 @@ export function duplicateEvent(eventId) {
 
 export function deleteEvent(eventId) {
   const events = getEvents();
-  const target = events.find((e) => e.id === eventId);
+  const target = events.find((e) => e.id === eventId || e.customId === eventId || e.custom_id === eventId);
   if (!target) return false;
 
+  const targetId = target.id;
   // Filter out ONLY the specified event (all its questions and sockets are deleted with it)
-  const nextList = events.filter((e) => e.id !== eventId);
+  const nextList = events.filter((e) => e.id !== targetId && e.customId !== targetId && e.custom_id !== targetId);
 
   saveEvents(nextList);
 
@@ -170,7 +175,7 @@ export function deleteEvent(eventId) {
     const rawSession = sessionStorage.getItem(STORAGE_KEYS.SESSION);
     if (rawSession) {
       const sess = JSON.parse(rawSession);
-      if (sess.event?.id === eventId) {
+      if (sess.event?.id === targetId || sess.event?.id === eventId) {
         sessionStorage.removeItem(STORAGE_KEYS.SESSION);
       }
     }

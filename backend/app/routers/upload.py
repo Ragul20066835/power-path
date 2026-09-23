@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import AdminUser
 from app.utils.auth import get_current_admin
+from app.utils.event_resolver import resolve_event_identifier
 from app.utils.csv_importer import (
     import_questions_csv,
     import_events_csv,
@@ -35,6 +36,14 @@ async def upload_questions_csv(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Target 'event_id' is required for Question-only CSV upload."
+        )
+
+    # Verify target event exists upfront
+    target_event = resolve_event_identifier(db, target_event_id)
+    if not target_event:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Target Event '{target_event_id}' not found."
         )
 
     try:

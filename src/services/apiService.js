@@ -564,9 +564,22 @@ class ApiService {
   async uploadQuestionsCSV(file, eventId) {
     const formData = new FormData();
     formData.append('file', file);
+    if (eventId) {
+      formData.append('event_id', eventId);
+    }
 
-    const query = `?event_id=${encodeURIComponent(eventId)}`;
+    const query = eventId ? `?event_id=${encodeURIComponent(eventId)}` : '';
     return this.request(`/api/v1/admin/upload/questions${query}`, {
+      method: 'POST',
+      body: formData
+    });
+  }
+
+  async uploadEventsCSV(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    return this.request('/api/v1/admin/upload/events', {
       method: 'POST',
       body: formData
     });
