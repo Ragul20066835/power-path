@@ -47,6 +47,7 @@ function normalizeQuestionForFrontend(q) {
 function normalizeEventForFrontend(event) {
   if (!event) return null;
   const questions = (event.questions || []).map(normalizeQuestionForFrontend);
+  const totalQ = Number(event.total_questions || event.totalQuestions || questions.length || 0);
   return {
     id: event.id,
     customId: event.custom_id || event.customId || event.id,
@@ -54,7 +55,7 @@ function normalizeEventForFrontend(event) {
     description: event.description || '',
     status: event.status || 'INACTIVE',
     questions,
-    totalQuestions: questions.length
+    totalQuestions: totalQ > 0 ? totalQ : questions.length
   };
 }
 
@@ -283,6 +284,7 @@ class ApiService {
       });
     }
 
+    const totalQ = Number(data.total_questions || data.event?.total_questions || 1);
     return {
       sessionId: data.session_id,
       player: {
@@ -291,7 +293,7 @@ class ApiService {
       },
       status: 'running',
       currentQuestionIndex: data.current_question_index || 0,
-      totalQuestions: data.total_questions || 1,
+      totalQuestions: totalQ > 0 ? totalQ : 1,
       totalWrongAttempts: data.wrong_attempts_total || 0,
       totalPenaltySeconds: data.penalty_seconds_total || 0,
       startedAt: data.started_at,
@@ -312,6 +314,7 @@ class ApiService {
         registerNo: data.register_number
       });
 
+      const totalQ = Number(data.total_questions || data.event?.total_questions || 1);
       return {
         sessionId: data.session_id,
         player: {
@@ -320,7 +323,7 @@ class ApiService {
         },
         status: data.status === 'PLAYING' ? 'running' : data.status === 'COMPLETED' ? 'completed' : 'idle',
         currentQuestionIndex: data.current_question_index || 0,
-        totalQuestions: data.total_questions || 1,
+        totalQuestions: totalQ > 0 ? totalQ : 1,
         totalWrongAttempts: data.wrong_attempts_total || 0,
         totalPenaltySeconds: data.penalty_seconds_total || 0,
         startedAt: data.started_at,

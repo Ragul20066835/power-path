@@ -321,3 +321,220 @@ async def test_question_complete_id_validation_regression(async_client, multi_st
     assert q2_comp_res.status_code == 200
     assert q2_comp_res.json()["event_completed"] is True
     assert q2_comp_res.json()["has_next_question"] is False
+
+
+@pytest.fixture
+def twenty_stage_event(db_session):
+    """Sets up a complete 20-stage tournament event."""
+    settings = TournamentSettings(key="global", event_status="OPEN", default_penalty_seconds=5)
+    db_session.merge(settings)
+
+    event = Event(
+        custom_id="TOURN20",
+        name="PowerPath 20-Stage Championship",
+        description="20 Stage Endurance Circuit Challenge",
+        status="ACTIVE"
+    )
+    db_session.add(event)
+    db_session.flush()
+
+    questions = []
+    for i in range(1, 21):
+        is_final = (i == 20)
+        q_name = "Final Circuit Rescue" if is_final else f"Circuit Stage {i}"
+        q = Question(
+            event_id=event.id,
+            custom_id=f"Q{i}",
+            name=q_name,
+            difficulty="Hard" if is_final else ("Medium" if i > 10 else "Easy"),
+            penalty_seconds=5,
+            question_order=i
+        )
+        db_session.add(q)
+        db_session.flush()
+        questions.append(q)
+
+        if is_final:
+            # Q20: 5 sockets (Final Circuit Rescue)
+            s1 = Socket(question_id=q.id, custom_id="S1", label="SOURCE", accepted_component_id="battery", hint="9V Battery", slot_order=1)
+            s2 = Socket(question_id=q.id, custom_id="S2", label="SWITCH", accepted_component_id="switch", hint="Toggle Switch", slot_order=2)
+            s3 = Socket(question_id=q.id, custom_id="S3", label="LIMITER", accepted_component_id="resistor", hint="330 Ohm", slot_order=3)
+            s4 = Socket(question_id=q.id, custom_id="S4", label="INDICATOR", accepted_component_id="led", hint="LED", slot_order=4)
+            s5 = Socket(question_id=q.id, custom_id="S5", label="GROUND", accepted_component_id="ground", hint="Ground", slot_order=5)
+            db_session.add_all([s1, s2, s3, s4, s5])
+        else:
+            # Q1-Q19: 2 sockets
+            s1 = Socket(question_id=q.id, custom_id="S1", label="SOURCE", accepted_component_id="battery", hint="9V Battery", slot_order=1)
+            s2 = Socket(question_id=q.id, custom_id="S2", label="LOAD", accepted_component_id="resistor", hint="330 Ohm", slot_order=2)
+            db_session.add_all([s1, s2])
+
+    db_session.commit()
+    return event, questions
+
+
+@pytest.mark.anyio
+async def test_twenty_stage_event_progression_and_q20_final_completion(async_client, twenty_stage_event):
+    """
+    Comprehensive regression test for 20-stage tournament:
+    1. Event with 20 questions returns total_questions=20 at session start.
+    2. Session starts at Q1 (index=0).
+    3. Completing Q1 advances to Q2 (has_next_question=True).
+    4. Progression through Q19 advances to Q20 (Final Circuit Rescue).
+    5. Session recovery at Q20 restores index 19, total 20, and Q20 entity.
+    6. Wrong Q20 ID or premature Q21 ID rejection (400).
+    7. Q20 completion before sockets filled rejected (400).
+    8. Q20 completion with 5/5 sockets solved succeeds:
+       - has_next_question == False
+       - next_question == None
+       - event_completed == True
+       - No Q21 is queried or fabricated.
+    9. Duplicate Q20 completion remains idempotent (200).
+    10. Session finish produces valid score, penalty, and rank.
+    """
+    event, questions = twenty_stage_event
+    assert len(questions) == 20
+    q1 = questions[0]
+    q19 = questions[18]
+    q20 = questions[19]
+
+    # 1. Start Session
+    start_res = await async_client.post(
+        "/api/v1/game/session/start",
+        json={"player_name": "Champion Player", "register_number": "REG-2026-CHAMP", "event_id": event.id}
+    )
+    assert start_res.status_code == 201
+    start_data = start_res.json()
+    session_id = start_data["session_id"]
+    assert start_data["total_questions"] == 20
+    assert start_data["current_question_index"] == 0
+    assert start_data["current_question"]["id"] == q1.id
+
+    # 2. Advance through Q1 to Q18
+    for i in range(18):
+        current_q = questions[i]
+        next_expected_q = questions[i + 1]
+
+        # Place S1 and S2
+        p1 = await async_client.post(
+            "/api/v1/game/placement/attempt",
+            json={"session_id": session_id, "question_id": current_q.id, "socket_id": "S1", "component_id": "battery"}
+        )
+        assert p1.status_code == 200 and p1.json()["correct"] is True
+
+        p2 = await async_client.post(
+            "/api/v1/game/placement/attempt",
+            json={"session_id": session_id, "question_id": current_q.id, "socket_id": "S2", "component_id": "resistor"}
+        )
+        assert p2.status_code == 200 and p2.json()["correct"] is True
+
+        # Complete stage
+        comp_res = await async_client.post(
+            "/api/v1/game/question/complete",
+            json={"session_id": session_id, "question_id": current_q.id}
+        )
+        assert comp_res.status_code == 200
+        comp_data = comp_res.json()
+        assert comp_data["has_next_question"] is True
+        assert comp_data["event_completed"] is False
+        assert comp_data["next_question"]["id"] == next_expected_q.id
+
+    # 3. Complete Q19 -> Advances to Q20 (Final Circuit Rescue)
+    for s_id, c_id in [("S1", "battery"), ("S2", "resistor")]:
+        p = await async_client.post(
+            "/api/v1/game/placement/attempt",
+            json={"session_id": session_id, "question_id": q19.id, "socket_id": s_id, "component_id": c_id}
+        )
+        assert p.status_code == 200 and p.json()["correct"] is True
+
+    comp_q19_res = await async_client.post(
+        "/api/v1/game/question/complete",
+        json={"session_id": session_id, "question_id": q19.id}
+    )
+    assert comp_q19_res.status_code == 200
+    comp_q19_data = comp_q19_res.json()
+    assert comp_q19_data["has_next_question"] is True
+    assert comp_q19_data["next_question"]["id"] == q20.id
+    assert comp_q19_data["next_question"]["name"] == "Final Circuit Rescue"
+    assert len(comp_q19_data["next_question"]["sockets"]) == 5
+
+    # 4. Session Recovery at Q20 (Player is on Stage 20 / 20)
+    rec_q20 = await async_client.get(f"/api/v1/game/session/{session_id}")
+    assert rec_q20.status_code == 200
+    rec_q20_data = rec_q20.json()
+    assert rec_q20_data["current_question_index"] == 19
+    assert rec_q20_data["total_questions"] == 20
+    assert rec_q20_data["current_question"]["id"] == q20.id
+    assert rec_q20_data["current_question"]["name"] == "Final Circuit Rescue"
+    assert len(rec_q20_data["current_question"]["sockets"]) == 5
+
+    # 5. Premature / non-existent Q21 or wrong question ID rejected on Q20
+    fake_q21_res = await async_client.post(
+        "/api/v1/game/question/complete",
+        json={"session_id": session_id, "question_id": "Q21_NON_EXISTENT"}
+    )
+    assert fake_q21_res.status_code == 400
+    assert "Question ID does not match active stage" in fake_q21_res.json()["detail"]
+
+    # 6. Complete Q20 before placing all 5 sockets -> Rejected with 400
+    incomplete_q20 = await async_client.post(
+        "/api/v1/game/question/complete",
+        json={"session_id": session_id, "question_id": q20.id}
+    )
+    assert incomplete_q20.status_code == 400
+    assert "is not solved yet" in incomplete_q20.json()["detail"]
+
+    # 7. Solve all 5 sockets for Q20 (Final Circuit Rescue)
+    q20_placements = [
+        ("S1", "battery"),
+        ("S2", "switch"),
+        ("S3", "resistor"),
+        ("S4", "led"),
+        ("S5", "ground")
+    ]
+    for s_id, comp_id in q20_placements:
+        p_res = await async_client.post(
+            "/api/v1/game/placement/attempt",
+            json={"session_id": session_id, "question_id": q20.id, "socket_id": s_id, "component_id": comp_id}
+        )
+        assert p_res.status_code == 200
+        assert p_res.json()["correct"] is True
+
+    # 8. Complete Q20 (Final Stage) -> MUST return has_next_question=False, next_question=None, event_completed=True
+    comp_q20_res = await async_client.post(
+        "/api/v1/game/question/complete",
+        json={"session_id": session_id, "question_id": q20.id}
+    )
+    assert comp_q20_res.status_code == 200
+    comp_q20_data = comp_q20_res.json()
+    assert comp_q20_data["has_next_question"] is False
+    assert comp_q20_data["next_question"] is None
+    assert comp_q20_data["event_completed"] is True
+    assert comp_q20_data["question_index"] == 20
+    assert "All stages completed" in comp_q20_data["message"]
+
+    # 9. Duplicate Q20 completion call is IDEMPOTENT (returns 200 without error)
+    dup_q20_res = await async_client.post(
+        "/api/v1/game/question/complete",
+        json={"session_id": session_id, "question_id": q20.id}
+    )
+    assert dup_q20_res.status_code == 200
+    assert dup_q20_res.json()["has_next_question"] is False
+    assert dup_q20_res.json()["next_question"] is None
+    assert dup_q20_res.json()["event_completed"] is True
+
+    # 10. Finish Session
+    finish_res = await async_client.post(
+        "/api/v1/game/session/finish",
+        json={"session_id": session_id}
+    )
+    assert finish_res.status_code == 200
+    finish_data = finish_res.json()
+    assert finish_data["player_name"] == "Champion Player"
+    assert finish_data["total_questions"] == 20
+    assert finish_data["final_time_ms"] > 0
+    assert finish_data["rank"] >= 1
+
+    # 11. Subsequent Session Recovery returns COMPLETED
+    rec_final = await async_client.get(f"/api/v1/game/session/{session_id}")
+    assert rec_final.status_code == 200
+    assert rec_final.json()["status"] == "COMPLETED"

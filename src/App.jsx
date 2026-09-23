@@ -70,6 +70,7 @@ export function App() {
     status: 'idle', // 'idle' | 'running' | 'completed'
     currentQuestionIndex: 0,
     currentQuestion: null,
+    totalQuestions: 1,
     event: null,
     placedComponents: {},
     wrongAttempts: 0,
@@ -238,12 +239,20 @@ export function App() {
             }
 
             if (recovered.status === 'running') {
+              const totalQ = Number(
+                recovered.totalQuestions ||
+                recovered.event?.totalQuestions ||
+                effectiveActiveEvent?.totalQuestions ||
+                effectiveActiveEvent?.questions?.length ||
+                1
+              );
               setGameState({
                 sessionId: recovered.sessionId,
                 player: recovered.player,
                 status: 'running',
                 currentQuestionIndex: recovered.currentQuestionIndex,
                 currentQuestion: recovered.currentQuestion,
+                totalQuestions: totalQ > 0 ? totalQ : 1,
                 event: recovered.event || effectiveActiveEvent,
                 placedComponents: placedMap,
                 wrongAttempts: recovered.totalWrongAttempts,
@@ -365,12 +374,21 @@ export function App() {
           setActiveEvent(sessionData.event);
         }
 
+        const totalQ = Number(
+          sessionData.totalQuestions ||
+          sessionData.event?.totalQuestions ||
+          activeEvent?.totalQuestions ||
+          activeEvent?.questions?.length ||
+          1
+        );
+
         setGameState({
           sessionId: sessionData.sessionId,
           player: sessionData.player,
           status: 'running',
           currentQuestionIndex: sessionData.currentQuestionIndex || 0,
           currentQuestion: sessionData.currentQuestion,
+          totalQuestions: totalQ > 0 ? totalQ : 1,
           event: sessionData.event || activeEvent,
           placedComponents: initialPlaced,
           wrongAttempts: 0,
@@ -386,7 +404,6 @@ export function App() {
         });
 
         soundEngine.playClick();
-        const totalQ = sessionData.totalQuestions || sessionData.event?.totalQuestions || activeEvent?.questions?.length || 1;
         showToast(
           'Circuit Challenge Initialized',
           `Event: ${sessionData.event?.name || activeEvent?.name || 'Tournament'} (${totalQ} stages).`,
@@ -458,8 +475,8 @@ export function App() {
 
               soundEngine.playVictory();
 
-              if (compRes.hasNextQuestion) {
-                // Authoritative stage advancement confirmed by backend
+              if (compRes.hasNextQuestion && compRes.nextQuestion) {
+                // Intermediate stage advancement confirmed by backend
                 setGameState((prev) => ({
                   ...prev,
                   nextQuestion: compRes.nextQuestion,
@@ -476,32 +493,49 @@ export function App() {
                   'success',
                   3500
                 );
-              } else if (compRes.eventCompleted) {
-                // Final tournament stage complete -> Fetch official result from backend
-                const finishRes = await apiService.finishSession(gameState.sessionId);
-                soundEngine.playVictory();
-                setGameState((prev) => ({
-                  ...prev,
-                  status: 'completed',
-                  isQuestionCompleted: true,
-                  result: {
-                    rawTimeMs: finishRes.rawTimeMs,
-                    rawTimeFormatted: formatTime(finishRes.rawTimeMs),
-                    wrongAttempts: finishRes.totalWrongAttempts,
-                    penaltySeconds: finishRes.totalPenaltySeconds,
-                    penaltyFormatted: `+${finishRes.totalPenaltySeconds}s`,
-                    finalTimeMs: finishRes.finalTimeMs,
-                    finalTimeFormatted: formatTime(finishRes.finalTimeMs),
-                    rank: finishRes.rank
-                  }
-                }));
+              } else {
+                // Final tournament stage complete (no next_question) -> Fetch official result from backend
+                try {
+                  const finishRes = await apiService.finishSession(gameState.sessionId);
+                  soundEngine.playVictory();
+                  setGameState((prev) => ({
+                    ...prev,
+                    status: 'completed',
+                    isQuestionCompleted: true,
+                    nextQuestion: null,
+                    result: {
+                      rawTimeMs: finishRes.rawTimeMs,
+                      rawTimeFormatted: formatTime(finishRes.rawTimeMs),
+                      wrongAttempts: finishRes.totalWrongAttempts,
+                      penaltySeconds: finishRes.totalPenaltySeconds,
+                      penaltyFormatted: `+${finishRes.totalPenaltySeconds}s`,
+                      finalTimeMs: finishRes.finalTimeMs,
+                      finalTimeFormatted: formatTime(finishRes.finalTimeMs),
+                      rank: finishRes.rank
+                    }
+                  }));
 
-                showToast(
-                  'CHAMPIONSHIP CIRCUIT COMPLETE!',
-                  'All stages completed! Performance telemetry logged.',
-                  'success',
-                  5000
-                );
+                  showToast(
+                    'CHAMPIONSHIP CIRCUIT COMPLETE!',
+                    'All stages completed! Performance telemetry logged.',
+                    'success',
+                    5000
+                  );
+                } catch (finishErr) {
+                  console.error('Session finish error:', finishErr);
+                  setGameState((prev) => ({
+                    ...prev,
+                    status: 'completed',
+                    isQuestionCompleted: true,
+                    nextQuestion: null
+                  }));
+                  showToast(
+                    'Match Completed',
+                    'All tournament circuits completed successfully!',
+                    'success',
+                    4000
+                  );
+                }
               }
             } catch (compErr) {
               console.error('Stage completion sync error:', compErr);
@@ -570,6 +604,7 @@ export function App() {
       ...prev,
       currentQuestionIndex: prev.currentQuestionIndex + 1,
       currentQuestion: nextQ,
+      totalQuestions: prev.totalQuestions,
       placedComponents: initialPlaced,
       isQuestionCompleted: false,
       nextQuestion: null,

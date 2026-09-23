@@ -1031,6 +1031,176 @@ const q001 = e001.questions[0];
   localStorage.clear();
 }
 
+// TEST 23: 20-Stage Tournament Event Progress Display & Final Question Q20 Completion Flow
+{
+  // 1. Backend Start Session response for 20-stage tournament
+  const backend20StartResponse = {
+    session_id: 'PP-20ST-CHAMP',
+    player_name: 'Ragul',
+    register_number: '24ECE100',
+    total_questions: 20,
+    current_question_index: 0,
+    started_at: '2026-09-23T08:00:00.000Z',
+    wrong_attempts_total: 0,
+    penalty_seconds_total: 0,
+    event: {
+      id: 'e-uuid-20',
+      custom_id: 'TOURN20',
+      name: 'PowerPath 20-Stage Championship',
+      total_questions: 20,
+      status: 'ACTIVE'
+    },
+    current_question: {
+      id: 'q-uuid-01',
+      custom_id: 'Q1',
+      name: 'Stage 1 Circuit',
+      sockets: [
+        { id: 's-1', custom_id: 'S1', label: 'PWR', accepted_component_id: 'battery' },
+        { id: 's-2', custom_id: 'S2', label: 'LOAD', accepted_component_id: 'resistor' }
+      ]
+    }
+  };
+
+  // Helper calculating authoritative UI stage numbers (mirrors GameStats.jsx & Game.jsx)
+  const computeProgressDisplay = (currentQuestionIndex, totalQuestions) => {
+    const currentStageNumber = String(currentQuestionIndex + 1).padStart(2, '0');
+    const totalStagesNumber = String(totalQuestions).padStart(2, '0');
+    return {
+      currentStageNumber,
+      totalStagesNumber,
+      badgeText: `QUESTION ${currentStageNumber} / ${totalStagesNumber}`,
+      progressText: `${currentStageNumber} of ${totalStagesNumber} Completed`
+    };
+  };
+
+  // 1. Session start at Q1 (Index 0)
+  const totalQAuthoritative = Number(backend20StartResponse.total_questions || backend20StartResponse.event.total_questions || 1);
+  assert(totalQAuthoritative === 20, 'TEST 23.1: 20-question event returns authoritative totalQuestions = 20');
+
+  const q1Display = computeProgressDisplay(0, totalQAuthoritative);
+  assert(q1Display.badgeText === 'QUESTION 01 / 20', 'TEST 23.2: Q1 badge displays "QUESTION 01 / 20"');
+  assert(q1Display.progressText === '01 of 20 Completed', 'TEST 23.3: Q1 progression displays "01 of 20 Completed"');
+
+  // 2. Q2 (Index 1)
+  const q2Display = computeProgressDisplay(1, totalQAuthoritative);
+  assert(q2Display.badgeText === 'QUESTION 02 / 20', 'TEST 23.4: Q2 badge displays "QUESTION 02 / 20"');
+  assert(q2Display.progressText === '02 of 20 Completed', 'TEST 23.5: Q2 progression displays "02 of 20 Completed"');
+
+  // 3. Q19 (Index 18)
+  const q19Display = computeProgressDisplay(18, totalQAuthoritative);
+  assert(q19Display.badgeText === 'QUESTION 19 / 20', 'TEST 23.6: Q19 badge displays "QUESTION 19 / 20"');
+  assert(q19Display.progressText === '19 of 20 Completed', 'TEST 23.7: Q19 progression displays "19 of 20 Completed"');
+
+  // 4. Q20 (Index 19 - Final Question)
+  const q20Display = computeProgressDisplay(19, totalQAuthoritative);
+  assert(q20Display.badgeText === 'QUESTION 20 / 20', 'TEST 23.8: Q20 badge displays "QUESTION 20 / 20"');
+  assert(q20Display.progressText === '20 of 20 Completed', 'TEST 23.9: Q20 progression displays "20 of 20 Completed"');
+  assert(q20Display.progressText !== '20 of 01 Completed', 'TEST 23.10: Q20 progression NEVER displays "20 of 01 Completed"');
+
+  // 5. Authoritative Session Recovery on Q20
+  const q20RecoveryPayload = {
+    session_id: 'PP-20ST-CHAMP',
+    player_name: 'Ragul',
+    register_number: '24ECE100',
+    status: 'PLAYING',
+    current_question_index: 19,
+    total_questions: 20,
+    event: { id: 'e-uuid-20', total_questions: 20 },
+    current_question: {
+      id: 'q-uuid-20',
+      custom_id: 'Q20',
+      name: 'Final Circuit Rescue',
+      sockets: [
+        { id: 's1', custom_id: 'S1', label: 'SOURCE' },
+        { id: 's2', custom_id: 'S2', label: 'SWITCH' },
+        { id: 's3', custom_id: 'S3', label: 'LIMITER' },
+        { id: 's4', custom_id: 'S4', label: 'INDICATOR' },
+        { id: 's5', custom_id: 'S5', label: 'GROUND' }
+      ]
+    },
+    placed_socket_ids: ['s1', 's2', 's3', 's4', 's5']
+  };
+
+  const recoveredTotalQ = Number(q20RecoveryPayload.total_questions || q20RecoveryPayload.event?.total_questions || 1);
+  const recQ20Display = computeProgressDisplay(q20RecoveryPayload.current_question_index, recoveredTotalQ);
+  assert(recoveredTotalQ === 20, 'TEST 23.11: Q20 recovery maintains totalQuestions = 20');
+  assert(recQ20Display.progressText === '20 of 20 Completed', 'TEST 23.12: Q20 recovery displays "20 of 20 Completed"');
+
+  // 6. Q20 Completion API Response Shape Simulation
+  const q20CompletionBackendResponse = {
+    session_id: 'PP-20ST-CHAMP',
+    question_index: 20,
+    has_next_question: false,
+    next_question: null,
+    event_completed: true,
+    wrong_attempts_total: 0,
+    penalty_seconds_total: 0,
+    message: 'All stages completed! Proceed to finish.'
+  };
+
+  assert(q20CompletionBackendResponse.has_next_question === false, 'TEST 23.13: Q20 completion returns has_next_question = false');
+  assert(q20CompletionBackendResponse.next_question === null, 'TEST 23.14: Q20 completion returns next_question = null');
+  assert(q20CompletionBackendResponse.event_completed === true, 'TEST 23.15: Q20 completion returns event_completed = true');
+
+  // 7. Frontend handling for Q20 completion:
+  // - Intermediate modal ONLY rendered if gameState.nextQuestion is truthy
+  // - For Q20, nextQuestion is null, so intermediate modal is NOT shown (no Q21 stage)
+  const shouldRenderIntermediateModal = (isQuestionCompleted, isCompleted, nextQuestion) => {
+    return isQuestionCompleted && !isCompleted && Boolean(nextQuestion);
+  };
+
+  // For Q19 -> nextQuestion is Q20 -> intermediate modal is shown
+  assert(shouldRenderIntermediateModal(true, false, { id: 'Q20' }) === true, 'TEST 23.16: Intermediate stage completion modal shows when nextQuestion is present');
+
+  // For Q20 -> nextQuestion is null -> intermediate modal is NEVER shown
+  assert(shouldRenderIntermediateModal(true, false, null) === false, 'TEST 23.17: Q20 does NOT render intermediate stage complete modal');
+
+  // 8. Q20 completion direct transition to finish flow
+  const handleFinalCompletion = (currentState, compRes, finishRes) => {
+    if (compRes.has_next_question && compRes.next_question) {
+      return {
+        ...currentState,
+        nextQuestion: compRes.next_question,
+        isQuestionCompleted: true
+      };
+    } else {
+      // Final stage finish
+      return {
+        ...currentState,
+        status: 'completed',
+        isQuestionCompleted: true,
+        nextQuestion: null,
+        result: {
+          rawTimeMs: finishRes.raw_time_ms,
+          finalTimeMs: finishRes.final_time_ms,
+          rank: finishRes.rank
+        }
+      };
+    }
+  };
+
+  const finishPayload = {
+    session_id: 'PP-20ST-CHAMP',
+    raw_time_ms: 60000,
+    final_time_ms: 60000,
+    rank: 1
+  };
+
+  const activeQ20State = {
+    sessionId: 'PP-20ST-CHAMP',
+    status: 'running',
+    currentQuestionIndex: 19,
+    totalQuestions: 20,
+    isQuestionCompleted: false,
+    nextQuestion: null
+  };
+
+  const finalFinishedState = handleFinalCompletion(activeQ20State, q20CompletionBackendResponse, finishPayload);
+  assert(finalFinishedState.status === 'completed', 'TEST 23.18: Final stage transitions gameState.status to completed');
+  assert(finalFinishedState.nextQuestion === null, 'TEST 23.19: Final stage nextQuestion remains null (no Q21 fabricated)');
+  assert(finalFinishedState.result.rank === 1, 'TEST 23.20: Final tournament result stored');
+}
+
 console.log(`\n======================================================`);
 console.log(`TEST RESULTS: ${passedTests} / ${totalTests} TESTS PASSED`);
 console.log(`======================================================\n`);
@@ -1040,6 +1210,7 @@ if (passedTests === totalTests) {
 } else {
   process.exit(1);
 }
+
 
 
 

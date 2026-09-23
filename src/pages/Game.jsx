@@ -22,7 +22,11 @@ export function Game({
   const activeEvent = gameState.event || event;
   const currentQIndex = gameState.currentQuestionIndex ?? 0;
   const currentQuestion = gameState.currentQuestion || activeEvent?.questions?.[currentQIndex] || null;
-  const totalQuestions = gameState.totalQuestions || activeEvent?.totalQuestions || activeEvent?.questions?.length || 1;
+  const totalQuestions = Number(
+    gameState.totalQuestions ||
+    activeEvent?.totalQuestions ||
+    (activeEvent?.questions?.length > 0 ? activeEvent.questions.length : 1)
+  );
   const totalSlots = currentQuestion?.slots?.length || 5;
 
   // Watch lastAction to trigger UI shake/snap animations
@@ -109,8 +113,8 @@ export function Game({
         </section>
       </div>
 
-      {/* Intermediate Stage Complete Modal Dialog */}
-      {gameState.isQuestionCompleted && !isCompleted && (
+      {/* Intermediate Stage Complete Modal Dialog (Only shown when next stage exists) */}
+      {gameState.isQuestionCompleted && !isCompleted && Boolean(gameState.nextQuestion) && (
         <div className="modal-backdrop animate-fade-in" role="dialog" aria-modal="true">
           <div className="result-modal-card glass-panel animate-scale-up" style={{ maxWidth: '520px' }}>
             <div className="result-header">
