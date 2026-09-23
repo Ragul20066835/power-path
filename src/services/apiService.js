@@ -4,11 +4,14 @@
  * Base URL configured via VITE_API_BASE_URL (defaults to http://localhost:8000 in dev).
  */
 
+import { formatTime } from '../engine/gameEngine.js';
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 const STORAGE_KEYS = {
   ADMIN_TOKEN: 'powerpath_admin_token',
-  SESSION_ID: 'powerpath_session_id'
+  SESSION_ID: 'powerpath_session_id',
+  PLAYER_SESSION: 'POWERPATH_PLAYER_SESSION'
 };
 
 /**
@@ -85,23 +88,47 @@ class ApiService {
 
   getSavedSessionId() {
     try {
-      return localStorage.getItem(STORAGE_KEYS.SESSION_ID) || sessionStorage.getItem(STORAGE_KEYS.SESSION_ID) || null;
+      // 1. Try POWERPATH_PLAYER_SESSION JSON recovery pointer
+      const raw = localStorage.getItem(STORAGE_KEYS.PLAYER_SESSION) || sessionStorage.getItem(STORAGE_KEYS.PLAYER_SESSION);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.sessionId) return String(parsed.sessionId).trim();
+          if (typeof parsed === 'string' && parsed.trim()) return parsed.trim();
+        } catch (_) {
+          if (typeof raw === 'string' && raw.trim()) return raw.trim();
+        }
+      }
+      // 2. Fallback to legacy SESSION_ID key
+      const legacy = localStorage.getItem(STORAGE_KEYS.SESSION_ID) || sessionStorage.getItem(STORAGE_KEYS.SESSION_ID);
+      return legacy ? String(legacy).trim() : null;
     } catch (e) {
       return null;
     }
   }
 
-  saveSessionId(sessionId) {
+  saveSessionId(sessionId, meta = {}) {
     try {
       if (sessionId) {
-        localStorage.setItem(STORAGE_KEYS.SESSION_ID, sessionId);
-        sessionStorage.setItem(STORAGE_KEYS.SESSION_ID, sessionId);
+        const cleanId = String(sessionId).trim();
+        const payload = JSON.stringify({
+          sessionId: cleanId,
+          eventId: meta.eventId || null,
+          registerNo: meta.registerNo || null,
+          savedAt: new Date().toISOString()
+        });
+        localStorage.setItem(STORAGE_KEYS.PLAYER_SESSION, payload);
+        sessionStorage.setItem(STORAGE_KEYS.PLAYER_SESSION, payload);
+        localStorage.setItem(STORAGE_KEYS.SESSION_ID, cleanId);
+        sessionStorage.setItem(STORAGE_KEYS.SESSION_ID, cleanId);
       } else {
+        localStorage.removeItem(STORAGE_KEYS.PLAYER_SESSION);
+        sessionStorage.removeItem(STORAGE_KEYS.PLAYER_SESSION);
         localStorage.removeItem(STORAGE_KEYS.SESSION_ID);
         sessionStorage.removeItem(STORAGE_KEYS.SESSION_ID);
       }
     } catch (e) {
-      console.warn('Failed storing session ID:', e);
+      console.warn('Failed storing session recovery record:', e);
     }
   }
 
@@ -250,7 +277,10 @@ class ApiService {
     });
 
     if (data.session_id) {
-      this.saveSessionId(data.session_id);
+      this.saveSessionId(data.session_id, {
+        eventId: data.event?.id || eventId,
+        registerNo: data.register_number
+      });
     }
 
     return {
@@ -277,7 +307,10 @@ class ApiService {
 
     try {
       const data = await this.request(`/api/v1/game/session/${encodeURIComponent(sessionId)}`);
-      this.saveSessionId(data.session_id);
+      this.saveSessionId(data.session_id, {
+        eventId: data.event?.id,
+        registerNo: data.register_number
+      });
 
       return {
         sessionId: data.session_id,
@@ -349,6 +382,8 @@ class ApiService {
       hasNextQuestion: Boolean(res.has_next_question),
       nextQuestion: normalizeQuestionForFrontend(res.next_question),
       eventCompleted: Boolean(res.event_completed),
+      wrongAttemptsTotal: res.wrong_attempts_total || 0,
+      penaltySecondsTotal: res.penalty_seconds_total || 0,
       message: res.message
     };
   }
@@ -602,11 +637,44 @@ class ApiService {
 
   async getLiveTelemetry(eventId = null, status = null) {
     const params = new URLSearchParams();
-    if (eventId) params.append('event_id', eventId);
-    if (status) params.append('status', status);
+    if (eventId && eventId !== 'ALL') params.append('event_id', eventId);
+    if (status && status !== 'ALL') params.append('status', status);
 
     const query = params.toString() ? `?${params.toString()}` : '';
     return this.request(`/api/v1/admin/monitor/telemetry${query}`);
+  }
+
+  async getAdminParticipants(eventId = null, status = null) {
+    const params = new URLSearchParams();
+    if (eventId && eventId !== 'ALL') params.append('event_id', eventId);
+    if (status && status !== 'ALL') params.append('status', status);
+
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const res = await this.request(`/api/v1/admin/participants${query}`);
+    const sessions = (res && res.sessions) ? res.sessions : (Array.isArray(res) ? res : []);
+
+    return sessions.map((s) => ({
+      id: s.id,
+      sessionId: s.session_id,
+      name: s.player_name,
+      regNo: s.register_number,
+      status: s.status,
+      eventId: s.event_id,
+      eventName: s.event_name,
+      currentQuestionIndex: s.current_question_index ?? 0,
+      totalQuestions: s.total_questions || 1,
+      currentQuestionName: s.current_question_name,
+      placedCount: s.placed_count || 0,
+      totalSlotsInCurrentQ: s.total_slots_in_current_q || 0,
+      wrongAttempts: s.wrong_attempts_total || 0,
+      penaltySeconds: s.penalty_seconds_total || 0,
+      startedAt: s.started_at,
+      completedAt: s.completed_at,
+      finalTimeMs: s.final_time_ms,
+      finalTimeFormatted: s.final_time_ms != null ? formatTime(s.final_time_ms) : (s.status === 'COMPLETED' ? '00:00.00' : 'In Progress'),
+      isActive: Boolean(s.is_active),
+      questionProgressText: `Stage ${(s.current_question_index || 0) + 1}/${s.total_questions || 1}`
+    }));
   }
 
   connectMonitorWebSocket(onEvent, onStatusChange) {

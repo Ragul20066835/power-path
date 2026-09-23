@@ -4,11 +4,12 @@ import { Search, Users, RefreshCw } from 'lucide-react';
 /**
  * ParticipantsList - Displays all registered contest participants and their active stage
  */
-export function ParticipantsList({ participants, onRefresh }) {
+export function ParticipantsList({ participants = [], events = [], onRefresh }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [eventFilter, setEventFilter] = useState('ALL');
 
-  const filtered = participants.filter((p) => {
+  const filtered = (participants || []).filter((p) => {
     const matchesSearch =
       (p.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (p.regNo || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -17,7 +18,12 @@ export function ParticipantsList({ participants, onRefresh }) {
     const matchesStatus =
       statusFilter === 'ALL' || (p.status || '').toUpperCase() === statusFilter;
 
-    return matchesSearch && matchesStatus;
+    const matchesEvent =
+      eventFilter === 'ALL' ||
+      p.eventId === eventFilter ||
+      p.eventName === eventFilter;
+
+    return matchesSearch && matchesStatus && matchesEvent;
   });
 
   return (
@@ -47,6 +53,23 @@ export function ParticipantsList({ participants, onRefresh }) {
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
+
+        {events && events.length > 0 && (
+          <div className="select-filter-wrap">
+            <select
+              className="admin-filter-select"
+              value={eventFilter}
+              onChange={(e) => setEventFilter(e.target.value)}
+            >
+              <option value="ALL">ALL EVENTS</option>
+              {events.map((ev) => (
+                <option key={ev.id} value={ev.id}>
+                  {ev.name || ev.id}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div className="filter-pill-group">
           {['ALL', 'PLAYING', 'COMPLETED'].map((st) => (

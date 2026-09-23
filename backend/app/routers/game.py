@@ -85,6 +85,8 @@ class QuestionCompleteResponse(BaseModel):
     has_next_question: bool
     next_question: Optional[QuestionPublic] = None
     event_completed: bool = False
+    wrong_attempts_total: int = 0
+    penalty_seconds_total: int = 0
     message: str
 
 
@@ -501,6 +503,8 @@ def complete_question_stage(
             has_next_question=has_next,
             next_question=QuestionPublic.model_validate(next_q) if next_q else None,
             event_completed=not has_next,
+            wrong_attempts_total=session.wrong_attempts_total,
+            penalty_seconds_total=session.penalty_seconds_total,
             message="Stage already completed."
         )
 
@@ -511,6 +515,8 @@ def complete_question_stage(
             has_next_question=False,
             next_question=None,
             event_completed=True,
+            wrong_attempts_total=session.wrong_attempts_total,
+            penalty_seconds_total=session.penalty_seconds_total,
             message="All questions already completed."
         )
 
@@ -581,6 +587,8 @@ def complete_question_stage(
         has_next_question=has_next,
         next_question=QuestionPublic.model_validate(next_q) if next_q else None,
         event_completed=not has_next,
+        wrong_attempts_total=session.wrong_attempts_total,
+        penalty_seconds_total=session.penalty_seconds_total,
         message="Stage completed successfully." if has_next else "All stages completed! Proceed to finish."
     )
 

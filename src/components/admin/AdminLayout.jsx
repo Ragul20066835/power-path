@@ -272,12 +272,14 @@ export function AdminLayout({
           {activeTab === 'participants' && (
             <ParticipantsList
               participants={participants}
+              events={events}
               onRefresh={onRefresh}
             />
           )}
 
           {activeTab === 'live' && (
             <LiveMonitor
+              activeEvent={activeEvent}
               participants={participants}
               onRefresh={onRefresh}
             />

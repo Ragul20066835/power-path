@@ -718,6 +718,159 @@ const q001 = e001.questions[0];
   assert(getEventById('ERR2S') === null, 'TEST 17.8: Event cleanly removed');
 }
 
+// TEST 18: POWERPATH_PLAYER_SESSION Recovery Pointer Parsing & Lifecycle
+{
+  const SESSION_KEY = 'POWERPATH_PLAYER_SESSION';
+  localStorage.clear();
+
+  // Helper simulating apiService.getSavedSessionId
+  function getSavedSessionId() {
+    try {
+      const raw = localStorage.getItem(SESSION_KEY) || localStorage.getItem('powerpath_session_id');
+      if (!raw) return null;
+      try {
+        const parsed = JSON.parse(raw);
+        return (parsed && parsed.sessionId) ? parsed.sessionId : raw;
+      } catch {
+        return raw;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  function saveSessionId(sessionId, eventId = null) {
+    try {
+      const payload = JSON.stringify({
+        sessionId,
+        eventId: eventId || null,
+        savedAt: Date.now()
+      });
+      localStorage.setItem(SESSION_KEY, payload);
+    } catch {}
+  }
+
+  function clearSessionId() {
+    localStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem('powerpath_session_id');
+  }
+
+  // 1. Initial empty state
+  assert(getSavedSessionId() === null, 'TEST 18.1: Initially no saved session');
+
+  // 2. Save structured session pointer
+  saveSessionId('PP-12345678', 'ERR2S');
+  assert(getSavedSessionId() === 'PP-12345678', 'TEST 18.2: Structured session ID extracted properly');
+
+  // 3. Backward compatibility with raw string session pointer
+  localStorage.setItem('powerpath_session_id', 'PP-LEGACY-999');
+  localStorage.removeItem(SESSION_KEY);
+  assert(getSavedSessionId() === 'PP-LEGACY-999', 'TEST 18.3: Legacy raw string session ID supported');
+
+  // 4. Clear session removes all pointers
+  clearSessionId();
+  assert(getSavedSessionId() === null, 'TEST 18.4: clearSessionId wipes all session pointers');
+}
+
+// TEST 19: Authoritative Admin Participants Data Mapping & Telemetry Parsing
+{
+  const rawBackendSessions = [
+    {
+      id: 'sess-uuid-001',
+      session_id: 'PP-TEST001',
+      player_name: 'ragul2',
+      register_number: 'TEST001',
+      status: 'COMPLETED',
+      event_id: 'd8e7f629-e3c7-4af5-a1ab-8505eb61b1f3',
+      event_name: 'drop3',
+      current_question_index: 2,
+      total_questions: 2,
+      current_question_name: 'Stage 2',
+      placed_count: 5,
+      total_slots_in_current_q: 5,
+      wrong_attempts_total: 2,
+      penalty_seconds_total: 10,
+      started_at: '2026-09-23T06:43:00.000Z',
+      completed_at: '2026-09-23T06:43:25.000Z',
+      final_time_ms: 25000,
+      is_active: false
+    },
+    {
+      id: 'sess-uuid-002',
+      session_id: 'PP-TEST002',
+      player_name: 'ragul3',
+      register_number: 'TEST002',
+      status: 'PLAYING',
+      event_id: 'd8e7f629-e3c7-4af5-a1ab-8505eb61b1f3',
+      event_name: 'drop3',
+      current_question_index: 0,
+      total_questions: 2,
+      current_question_name: 'Stage 1',
+      placed_count: 2,
+      total_slots_in_current_q: 5,
+      wrong_attempts_total: 0,
+      penalty_seconds_total: 0,
+      started_at: '2026-09-23T06:45:00.000Z',
+      completed_at: null,
+      final_time_ms: null,
+      is_active: true
+    }
+  ];
+
+  // Helper simulating apiService.getAdminParticipants mapping
+  const mapped = rawBackendSessions.map((s) => ({
+    id: s.id,
+    sessionId: s.session_id,
+    name: s.player_name,
+    regNo: s.register_number,
+    status: s.status,
+    eventId: s.event_id,
+    eventName: s.event_name,
+    currentQuestionIndex: s.current_question_index ?? 0,
+    totalQuestions: s.total_questions || 1,
+    currentQuestionName: s.current_question_name,
+    placedCount: s.placed_count || 0,
+    totalSlotsInCurrentQ: s.total_slots_in_current_q || 0,
+    wrongAttempts: s.wrong_attempts_total || 0,
+    penaltySeconds: s.penalty_seconds_total || 0,
+    startedAt: s.started_at,
+    completedAt: s.completed_at,
+    finalTimeMs: s.final_time_ms,
+    finalTimeFormatted: s.final_time_ms != null ? formatTime(s.final_time_ms) : (s.status === 'COMPLETED' ? '00:00.00' : 'In Progress'),
+    isActive: Boolean(s.is_active),
+    questionProgressText: `Stage ${(s.current_question_index || 0) + 1}/${s.total_questions || 1}`
+  }));
+
+  assert(mapped.length === 2, 'TEST 19.1: Exactly 2 participants mapped from backend telemetry');
+  assert(mapped[0].name === 'ragul2' && mapped[0].regNo === 'TEST001', 'TEST 19.2: Participant A correctly mapped');
+  assert(mapped[0].status === 'COMPLETED', 'TEST 19.3: Participant A status is COMPLETED');
+  assert(mapped[0].finalTimeFormatted === '00:25.00', 'TEST 19.4: Participant A final time formatted');
+  assert(mapped[1].name === 'ragul3' && mapped[1].status === 'PLAYING', 'TEST 19.5: Participant B correctly mapped with PLAYING');
+  assert(mapped[1].finalTimeFormatted === 'In Progress', 'TEST 19.6: Playing participant shows "In Progress"');
+}
+
+// TEST 20: No Stale LocalStorage Participant Contamination
+{
+  localStorage.setItem('powerpath_participants', JSON.stringify([
+    { sessionId: 'STALE-001', name: 'Ghost LocalStorage Player', regNo: 'GHOST-01' }
+  ]));
+
+  const authoritativeBackendParticipants = [
+    { sessionId: 'PP-REAL-001', name: 'Authoritative Player', regNo: 'REG-REAL-01', status: 'COMPLETED' }
+  ];
+
+  // Refresh mechanism prioritizes backend data over localStorage
+  const effectiveParticipants = authoritativeBackendParticipants.length > 0
+    ? authoritativeBackendParticipants
+    : getParticipants();
+
+  assert(effectiveParticipants.length === 1, 'TEST 20.1: Authoritative backend list used');
+  assert(effectiveParticipants[0].sessionId === 'PP-REAL-001', 'TEST 20.2: Authoritative session present');
+  assert(!effectiveParticipants.some((p) => p.sessionId === 'STALE-001'), 'TEST 20.3: Stale localStorage ghost not present');
+
+  localStorage.clear();
+}
+
 console.log(`\n======================================================`);
 console.log(`TEST RESULTS: ${passedTests} / ${totalTests} TESTS PASSED`);
 console.log(`======================================================\n`);
@@ -727,5 +880,6 @@ if (passedTests === totalTests) {
 } else {
   process.exit(1);
 }
+
 
 

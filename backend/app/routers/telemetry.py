@@ -112,12 +112,13 @@ def session_heartbeat(
 
 
 # -----------------------------------------------------------------------------
-# 2. ADMIN TELEMETRY ENDPOINT
+# 2. ADMIN TELEMETRY & PARTICIPANTS ENDPOINTS
 # -----------------------------------------------------------------------------
 
 @router.get("/admin/monitor/telemetry", response_model=TelemetryResponse)
+@router.get("/admin/participants", response_model=TelemetryResponse)
 def get_live_telemetry(
-    event_id: Optional[str] = Query(None, description="Filter by Event UUID or custom_id"),
+    event_id: Optional[str] = Query(None, description="Filter by Event UUID or custom_id (e.g. 'ERR2S', 'ALL')"),
     session_status: Optional[str] = Query(None, alias="status", description="Filter by status (PLAYING, COMPLETED, ABANDONED)"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
@@ -125,7 +126,7 @@ def get_live_telemetry(
     db: Session = Depends(get_db)
 ):
     """
-    Returns lightweight player telemetry for the Admin Live Monitor.
+    Returns player telemetry and session state for Admin Live Monitor and Participants list.
     Detects abandoned sessions (> 5 minutes inactivity) and returns summary counts.
     CRITICAL: Secret component answers are EXCLUDED.
     """
@@ -147,12 +148,21 @@ def get_live_telemetry(
     # 2. Query sessions with optional filters
     query = db.query(ParticipantSession)
 
-    if event_id:
-        target_evt = resolve_event_identifier(db, event_id)
+    if event_id and str(event_id).strip() and str(event_id).strip().upper() != "ALL":
+        target_evt = resolve_event_identifier(db, str(event_id).strip())
         if target_evt:
             query = query.filter(ParticipantSession.event_id == target_evt.id)
         else:
-            query = query.filter(False)
+            return TelemetryResponse(
+                summary=TelemetrySummary(
+                    active_count=0,
+                    completed_count=0,
+                    abandoned_count=0,
+                    total_count=0
+                ),
+                sessions=[],
+                timestamp=now.isoformat()
+            )
 
     # Compute total counters
     all_sessions_for_counts = query.all()

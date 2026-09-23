@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Zap } from 'lucide-react';
 import { Header } from './components/Header';
 import { Home } from './pages/Home';
 import { Game } from './pages/Game';
@@ -56,6 +57,12 @@ export function App() {
   const [results, setResults] = useState(() => getLocalResults());
   const [activeEvent, setActiveEvent] = useState(null);
 
+  // Recovery Loading & Connection State
+  const [isSessionRecovering, setIsSessionRecovering] = useState(() => {
+    return Boolean(apiService.getSavedSessionId());
+  });
+  const [sessionRecoveryError, setSessionRecoveryError] = useState(null);
+
   // Player Game State with Authoritative Recovery
   const [gameState, setGameState] = useState({
     sessionId: null,
@@ -63,6 +70,7 @@ export function App() {
     status: 'idle', // 'idle' | 'running' | 'completed'
     currentQuestionIndex: 0,
     currentQuestion: null,
+    event: null,
     placedComponents: {},
     wrongAttempts: 0,
     penaltySeconds: 0,
@@ -122,9 +130,71 @@ export function App() {
   }, [gameState.status, gameState.sessionId]);
 
   // --------------------------------------------------------------------------
+  // ADMIN DATA REFRESH
+  // --------------------------------------------------------------------------
+  const refreshAdminData = useCallback(async () => {
+    try {
+      if (apiService.getAdminToken()) {
+        const profile = await apiService.getAdminProfile();
+        setAdminAuth({ isAuthenticated: true, user: profile });
+      }
+    } catch (e) {
+      setAdminAuth({ isAuthenticated: false, user: null });
+    }
+
+    try {
+      const adminEvts = await apiService.getAdminEvents();
+      if (adminEvts && adminEvts.length > 0) {
+        setEvents(adminEvts);
+        const act = adminEvts.find((e) => e.status === 'ACTIVE') || null;
+        setActiveEvent(act);
+      } else {
+        setEvents(getEvents());
+      }
+    } catch (e) {
+      setEvents(getEvents());
+    }
+
+    try {
+      if (apiService.getAdminToken()) {
+        const adminParts = await apiService.getAdminParticipants();
+        if (adminParts && Array.isArray(adminParts)) {
+          setParticipants(adminParts);
+        } else {
+          setParticipants(getParticipants());
+        }
+      } else {
+        setParticipants(getParticipants());
+      }
+    } catch (e) {
+      console.warn('Could not fetch admin participants from backend:', e);
+      setParticipants(getParticipants());
+    }
+
+    try {
+      const adminRes = await apiService.getAdminResults();
+      if (adminRes) {
+        setResults(adminRes);
+      }
+    } catch (e) {
+      setResults(getLocalResults());
+    }
+
+    try {
+      const liveSettings = await apiService.getSettings();
+      if (liveSettings) {
+        setSettings(liveSettings);
+      }
+    } catch (e) {
+      setSettings(getLocalSettings());
+    }
+  }, []);
+
+  // --------------------------------------------------------------------------
   // INITIAL DATA & SESSION RECOVERY
   // --------------------------------------------------------------------------
   const loadInitialData = useCallback(async () => {
+    setSessionRecoveryError(null);
     try {
       // 1. Fetch live tournament settings
       try {
@@ -150,13 +220,20 @@ export function App() {
       // 3. Attempt Authoritative Session Recovery
       const savedSessionId = apiService.getSavedSessionId();
       if (savedSessionId) {
+        setIsSessionRecovering(true);
         try {
           const recovered = await apiService.recoverSession(savedSessionId);
           if (recovered && recovered.sessionId) {
+            if (recovered.event) {
+              setActiveEvent(recovered.event);
+            }
+
             const placedMap = {};
             if (recovered.currentQuestion && recovered.currentQuestion.slots) {
               recovered.currentQuestion.slots.forEach((s) => {
-                placedMap[s.id] = recovered.placedSocketIds.includes(s.id) ? (s.customId || s.id) : null;
+                placedMap[s.id] = (recovered.placedSocketIds && recovered.placedSocketIds.includes(s.id))
+                  ? (s.customId || s.id)
+                  : null;
               });
             }
 
@@ -167,6 +244,7 @@ export function App() {
                 status: 'running',
                 currentQuestionIndex: recovered.currentQuestionIndex,
                 currentQuestion: recovered.currentQuestion,
+                event: recovered.event || effectiveActiveEvent,
                 placedComponents: placedMap,
                 wrongAttempts: recovered.totalWrongAttempts,
                 penaltySeconds: recovered.totalPenaltySeconds,
@@ -179,6 +257,7 @@ export function App() {
                 lastAction: null,
                 result: null
               });
+              setIsSessionRecovering(false);
               showToast('Session Restored', `Resumed active match for ${recovered.player.name}.`, 'info', 2500);
               return;
             } else if (recovered.status === 'completed') {
@@ -190,6 +269,7 @@ export function App() {
                   status: 'completed',
                   currentQuestionIndex: recovered.totalQuestions,
                   currentQuestion: null,
+                  event: recovered.event || effectiveActiveEvent,
                   placedComponents: {},
                   wrongAttempts: finishRes.totalWrongAttempts,
                   penaltySeconds: finishRes.totalPenaltySeconds,
@@ -212,15 +292,22 @@ export function App() {
                   }
                 });
               } catch (e) {
-                apiService.clearSessionId();
+                console.warn('Could not fetch finish session result:', e);
               }
+              setIsSessionRecovering(false);
               return;
             }
           }
+          // If recoverSession returned null (explicitly invalid or cleared on 404)
+          setIsSessionRecovering(false);
         } catch (recErr) {
-          console.warn('Session recovery failed:', recErr.message);
-          apiService.clearSessionId();
+          console.warn('Session recovery connection failure:', recErr.message);
+          setSessionRecoveryError('Could not reach tournament server to restore active match.');
+          setIsSessionRecovering(false);
+          return;
         }
+      } else {
+        setIsSessionRecovering(false);
       }
 
       // Default idle state
@@ -235,57 +322,16 @@ export function App() {
       }
     } catch (e) {
       console.error('Initialization error:', e);
+      setIsSessionRecovering(false);
     }
   }, [showToast]);
 
   useEffect(() => {
     loadInitialData();
-  }, [loadInitialData]);
-
-  // Refresh admin data
-  const refreshAdminData = useCallback(async () => {
-    try {
-      if (apiService.getAdminToken()) {
-        const profile = await apiService.getAdminProfile();
-        setAdminAuth({ isAuthenticated: true, user: profile });
-      }
-    } catch (e) {
-      setAdminAuth({ isAuthenticated: false, user: null });
+    if (adminAuth.isAuthenticated || viewMode === 'admin') {
+      refreshAdminData();
     }
-
-    try {
-      const adminEvts = await apiService.getAdminEvents();
-      if (adminEvts && adminEvts.length > 0) {
-        setEvents(adminEvts);
-        const act = adminEvts.find((e) => e.status === 'ACTIVE') || null;
-        setActiveEvent(act);
-      } else {
-        setEvents(getEvents());
-      }
-    } catch (e) {
-      setEvents(getEvents());
-    }
-
-    try {
-      const adminRes = await apiService.getAdminResults();
-      if (adminRes) {
-        setResults(adminRes);
-      }
-    } catch (e) {
-      setResults(getLocalResults());
-    }
-
-    try {
-      const liveSettings = await apiService.getSettings();
-      if (liveSettings) {
-        setSettings(liveSettings);
-      }
-    } catch (e) {
-      setSettings(getLocalSettings());
-    }
-
-    setParticipants(getParticipants());
-  }, []);
+  }, [loadInitialData, refreshAdminData, adminAuth.isAuthenticated, viewMode]);
 
   // --------------------------------------------------------------------------
   // PLAYER ACTIONS
@@ -405,7 +451,11 @@ export function App() {
                 setGameState((prev) => ({
                   ...prev,
                   nextQuestion: compRes.nextQuestion,
-                  isQuestionCompleted: true
+                  isQuestionCompleted: true,
+                  totalWrongAttempts: compRes.wrongAttemptsTotal ?? prev.totalWrongAttempts,
+                  totalPenaltySeconds: compRes.penaltySecondsTotal ?? prev.totalPenaltySeconds,
+                  wrongAttempts: compRes.wrongAttemptsTotal ?? prev.wrongAttempts,
+                  penaltySeconds: compRes.penaltySecondsTotal ?? prev.penaltySeconds
                 }));
                 showToast(
                   'STAGE COMPLETED!',
@@ -441,6 +491,7 @@ export function App() {
               }
             } catch (compErr) {
               console.error('Stage completion error:', compErr);
+              showToast('Stage Completion Sync Error', compErr.message || 'Could not verify stage completion with server.', 'error', 4000);
             }
           }
         } else {
@@ -475,11 +526,11 @@ export function App() {
   );
 
   const handleAdvanceToNextQuestion = useCallback(() => {
-    if (!gameState.nextQuestion && !activeEvent?.questions?.[gameState.currentQuestionIndex + 1]) {
+    if (!gameState.nextQuestion) {
       return;
     }
 
-    const nextQ = gameState.nextQuestion || activeEvent.questions[gameState.currentQuestionIndex + 1];
+    const nextQ = gameState.nextQuestion;
     const initialPlaced = {};
     if (nextQ && nextQ.slots) {
       nextQ.slots.forEach((s) => {
@@ -497,7 +548,7 @@ export function App() {
       nextQuestion: null,
       lastAction: null
     }));
-  }, [gameState.nextQuestion, gameState.currentQuestionIndex, activeEvent]);
+  }, [gameState.nextQuestion]);
 
   const handlePlayAgain = useCallback(async () => {
     apiService.clearSessionId();
@@ -816,7 +867,48 @@ export function App() {
 
       {/* Main Content View */}
       <main className="main-content">
-        {gameState.status === 'idle' ? (
+        {isSessionRecovering ? (
+          <div className="flex flex-col items-center justify-center min-h-[55vh] text-center p-8 bg-[#0a0f1d]/80 rounded-2xl border border-cyan-500/20 backdrop-blur-xl shadow-2xl max-w-lg mx-auto my-12 animate-pulse">
+            <div className="w-14 h-14 rounded-full border-4 border-cyan-500/20 border-t-cyan-400 animate-spin mb-6 shadow-[0_0_20px_rgba(6,182,212,0.4)]"></div>
+            <h2 className="text-xl font-mono font-bold tracking-wider text-cyan-400 mb-2 flex items-center gap-2">
+              <Zap className="w-5 h-5 animate-bounce" /> RESTORING ACTIVE MATCH...
+            </h2>
+            <p className="text-sm text-slate-300 font-mono">
+              Synchronizing authoritative circuit state with server telemetry
+            </p>
+          </div>
+        ) : sessionRecoveryError ? (
+          <div className="flex flex-col items-center justify-center min-h-[55vh] text-center p-8 bg-[#180e15]/90 rounded-2xl border border-rose-500/30 backdrop-blur-xl shadow-2xl max-w-lg mx-auto my-12">
+            <div className="w-14 h-14 rounded-full bg-rose-500/10 border border-rose-500/40 flex items-center justify-center mb-6 text-rose-400 font-bold text-2xl">
+              !
+            </div>
+            <h2 className="text-xl font-mono font-bold tracking-wider text-rose-400 mb-2">
+              SESSION SYNC PAUSED
+            </h2>
+            <p className="text-sm text-slate-300 font-mono mb-6">
+              {sessionRecoveryError}
+            </p>
+            <div className="flex gap-4">
+              <button
+                type="button"
+                onClick={loadInitialData}
+                className="px-5 py-2.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold font-mono text-sm transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)]"
+              >
+                Retry Sync
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  apiService.clearSessionId();
+                  setSessionRecoveryError(null);
+                }}
+                className="px-5 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-mono text-sm border border-slate-700 transition-all"
+              >
+                New Match
+              </button>
+            </div>
+          </div>
+        ) : gameState.status === 'idle' ? (
           <Home
             activeEvent={activeEvent}
             settings={settings}
