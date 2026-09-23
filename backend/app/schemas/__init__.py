@@ -36,6 +36,8 @@ from app.schemas.base import (
     AdminUserCreate,
     AdminUserPublic,
     TokenResponse,
+    ClearTestDataPreviewResponse,
+    ClearTestDataResponse,
 )
 
 __all__ = [
@@ -72,4 +74,6 @@ __all__ = [
     "AdminUserCreate",
     "AdminUserPublic",
     "TokenResponse",
+    "ClearTestDataPreviewResponse",
+    "ClearTestDataResponse",
 ]

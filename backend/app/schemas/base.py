@@ -322,3 +322,20 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     user: AdminUserPublic
 
+
+# -----------------------------------------------------------------------------
+# 11. TEST / LOAD-TEST DATA CLEANUP SCHEMAS
+# -----------------------------------------------------------------------------
+class ClearTestDataPreviewResponse(BaseModel):
+    test_sessions: int = 0
+    test_attempts: int = 0
+    test_results: int = 0
+    load_test_events: int = 0
+
+
+class ClearTestDataResponse(BaseModel):
+    message: str = "Test data cleared successfully."
+    deleted_sessions: int = 0
+    deleted_attempts: int = 0
+    deleted_results: int = 0
+    deleted_events: int = 0

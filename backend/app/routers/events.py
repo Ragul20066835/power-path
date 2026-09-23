@@ -6,14 +6,26 @@ Public Active Event API and Admin Event CRUD/Lifecycle.
 import uuid
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import Event, Question, Socket, AdminUser
+from app.models import (
+    Event,
+    Question,
+    Socket,
+    AdminUser,
+    ParticipantSession,
+    QuestionAttempt,
+    SocketPlacement,
+    TournamentResult,
+)
 from app.schemas import (
     EventPublic,
     EventAdmin,
     EventCreate,
     EventUpdate,
+    ClearTestDataPreviewResponse,
+    ClearTestDataResponse,
 )
 from app.utils.auth import get_current_admin
 from app.utils.event_resolver import resolve_event_identifier
@@ -229,3 +241,172 @@ def deactivate_event(
     db.commit()
     db.refresh(event)
     return EventAdmin.model_validate(event)
+
+
+# =============================================================================
+# 3. TEST & LOAD-TEST DATA CLEANUP (ADMIN MAINTENANCE)
+# =============================================================================
+
+@router.post("/admin/test-data/preview", response_model=ClearTestDataPreviewResponse)
+@router.post("/admin/load-test-data/preview", response_model=ClearTestDataPreviewResponse)
+def preview_test_data_cleanup(
+    current_admin: AdminUser = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Preview matching synthetic test/load-test records targeted for cleanup.
+    Does NOT delete any records.
+    Identifies test records by:
+    - LOAD_TEST_EVT_ event prefix
+    - RACE- register number prefix
+    - RaceTester player name
+    """
+    # 1. Identify load-test events
+    load_test_events = db.query(Event).filter(Event.custom_id.startswith("LOAD_TEST_EVT_")).all()
+
+    # Active event protection
+    if any(e.status == EventStatus.ACTIVE.value for e in load_test_events):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot clear test data: a load-test event (LOAD_TEST_EVT_*) is currently ACTIVE. Please deactivate it first."
+        )
+
+    load_test_event_ids = [e.id for e in load_test_events]
+
+    # 2. Identify test participant sessions
+    session_filters = [
+        ParticipantSession.register_number.ilike("RACE-%"),
+        ParticipantSession.player_name.ilike("RaceTester%"),
+    ]
+    if load_test_event_ids:
+        session_filters.append(ParticipantSession.event_id.in_(load_test_event_ids))
+
+    test_sessions = db.query(ParticipantSession).filter(or_(*session_filters)).all()
+    test_session_ids = [s.id for s in test_sessions]
+
+    # 3. Identify test tournament results
+    result_filters = [
+        TournamentResult.register_number.ilike("RACE-%"),
+        TournamentResult.player_name.ilike("RaceTester%"),
+    ]
+    if test_session_ids:
+        result_filters.append(TournamentResult.session_id.in_(test_session_ids))
+    if load_test_event_ids:
+        result_filters.append(TournamentResult.event_id.in_(load_test_event_ids))
+
+    test_results_count = db.query(TournamentResult).filter(or_(*result_filters)).count()
+
+    # 4. Identify test question attempts
+    test_attempts_count = db.query(QuestionAttempt).filter(
+        QuestionAttempt.session_id.in_(test_session_ids)
+    ).count() if test_session_ids else 0
+
+    return ClearTestDataPreviewResponse(
+        test_sessions=len(test_sessions),
+        test_attempts=test_attempts_count,
+        test_results=test_results_count,
+        load_test_events=len(load_test_events),
+    )
+
+
+@router.delete("/admin/test-data", response_model=ClearTestDataResponse)
+@router.delete("/admin/load-test-data", response_model=ClearTestDataResponse)
+def clear_test_data(
+    current_admin: AdminUser = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Permanently delete ONLY test and load-test participant records.
+    Deletes in strict dependency order:
+    1. Question attempts & Socket placements
+    2. Tournament results
+    3. Participant sessions
+    4. Load-test events (and their questions/sockets)
+    """
+    # 1. Identify load-test events
+    load_test_events = db.query(Event).filter(Event.custom_id.startswith("LOAD_TEST_EVT_")).all()
+
+    # Active event protection
+    if any(e.status == EventStatus.ACTIVE.value for e in load_test_events):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot clear test data: a load-test event (LOAD_TEST_EVT_*) is currently ACTIVE. Please deactivate it first."
+        )
+
+    load_test_event_ids = [e.id for e in load_test_events]
+
+    # 2. Identify test participant sessions
+    session_filters = [
+        ParticipantSession.register_number.ilike("RACE-%"),
+        ParticipantSession.player_name.ilike("RaceTester%"),
+    ]
+    if load_test_event_ids:
+        session_filters.append(ParticipantSession.event_id.in_(load_test_event_ids))
+
+    test_sessions = db.query(ParticipantSession).filter(or_(*session_filters)).all()
+    test_session_ids = [s.id for s in test_sessions]
+
+    # 3. Identify test tournament results
+    result_filters = [
+        TournamentResult.register_number.ilike("RACE-%"),
+        TournamentResult.player_name.ilike("RaceTester%"),
+    ]
+    if test_session_ids:
+        result_filters.append(TournamentResult.session_id.in_(test_session_ids))
+    if load_test_event_ids:
+        result_filters.append(TournamentResult.event_id.in_(load_test_event_ids))
+
+    test_results = db.query(TournamentResult).filter(or_(*result_filters)).all()
+
+    # 4. Identify dependent attempts and placements
+    if test_session_ids:
+        test_attempts = db.query(QuestionAttempt).filter(QuestionAttempt.session_id.in_(test_session_ids)).all()
+        test_placements = db.query(SocketPlacement).filter(SocketPlacement.session_id.in_(test_session_ids)).all()
+    else:
+        test_attempts = []
+        test_placements = []
+
+    sessions_count = len(test_sessions)
+    attempts_count = len(test_attempts)
+    results_count = len(test_results)
+    events_count = len(load_test_events)
+
+    if sessions_count == 0 and results_count == 0 and attempts_count == 0 and events_count == 0:
+        return ClearTestDataResponse(
+            message="No matching test data found to clear.",
+            deleted_sessions=0,
+            deleted_attempts=0,
+            deleted_results=0,
+            deleted_events=0,
+        )
+
+    # Execute deletion in strict foreign-key order:
+    # 1. Question Attempts
+    for a in test_attempts:
+        db.delete(a)
+
+    # 2. Socket Placements
+    for p in test_placements:
+        db.delete(p)
+
+    # 3. Tournament Results
+    for r in test_results:
+        db.delete(r)
+
+    # 4. Participant Sessions
+    for s in test_sessions:
+        db.delete(s)
+
+    # 5. Load-test Events (cascades to questions and sockets)
+    for e in load_test_events:
+        db.delete(e)
+
+    db.commit()
+
+    return ClearTestDataResponse(
+        message="Test data cleared successfully.",
+        deleted_sessions=sessions_count,
+        deleted_attempts=attempts_count,
+        deleted_results=results_count,
+        deleted_events=events_count,
+    )

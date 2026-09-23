@@ -296,6 +296,7 @@ export function AdminLayout({
             <SettingsPanel
               settings={settings}
               onSaveSettings={onSaveSettings}
+              onRefresh={onRefresh}
             />
           )}
         </div>

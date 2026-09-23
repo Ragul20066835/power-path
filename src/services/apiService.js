@@ -528,6 +528,29 @@ class ApiService {
   }
 
   // --------------------------------------------------------------------------
+  // 5b. ADMIN TEST & LOAD-TEST DATA CLEANUP
+  // --------------------------------------------------------------------------
+  async getTestDataPreview() {
+    return this.request('/api/v1/admin/test-data/preview', {
+      method: 'POST'
+    });
+  }
+
+  async clearTestData() {
+    return this.request('/api/v1/admin/test-data', {
+      method: 'DELETE'
+    });
+  }
+
+  async getLoadTestDataPreview() {
+    return this.getTestDataPreview();
+  }
+
+  async cleanupLoadTestData() {
+    return this.clearTestData();
+  }
+
+  // --------------------------------------------------------------------------
   // 6. ADMIN QUESTIONS CRUD
   // --------------------------------------------------------------------------
   async getAdminQuestions(eventId) {
