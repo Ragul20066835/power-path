@@ -257,9 +257,11 @@ def preview_test_data_cleanup(
     Preview matching synthetic test/load-test records targeted for cleanup.
     Does NOT delete any records.
     Identifies test records by:
-    - LOAD_TEST_EVT_ event prefix
-    - RACE- register number prefix
-    - RaceTester player name
+    1. LOAD_TEST_EVT_ event prefix
+    2. RaceTester / RACE-% race load tests
+    3. Contestant_% / REG-LOAD-% / REG-B10-% / REG-B25-% / REG-B50-% batch load tests
+    4. E2E Challenger / REG-E2E-99 integration tests
+    5. TEST001 / TEST002 scratch tests
     """
     # 1. Identify load-test events
     load_test_events = db.query(Event).filter(Event.custom_id.startswith("LOAD_TEST_EVT_")).all()
@@ -275,8 +277,20 @@ def preview_test_data_cleanup(
 
     # 2. Identify test participant sessions
     session_filters = [
-        ParticipantSession.register_number.ilike("RACE-%"),
+        # Race load tests
         ParticipantSession.player_name.ilike("RaceTester%"),
+        ParticipantSession.register_number.ilike("RACE-%"),
+        # Concurrency load-test batches
+        ParticipantSession.player_name.ilike("Contestant_%"),
+        ParticipantSession.register_number.ilike("REG-LOAD-%"),
+        ParticipantSession.register_number.ilike("REG-B10-%"),
+        ParticipantSession.register_number.ilike("REG-B25-%"),
+        ParticipantSession.register_number.ilike("REG-B50-%"),
+        # E2E tests
+        ParticipantSession.player_name == "E2E Challenger",
+        ParticipantSession.register_number == "REG-E2E-99",
+        # Known scratch/test registrations
+        ParticipantSession.register_number.in_(["TEST001", "TEST002"]),
     ]
     if load_test_event_ids:
         session_filters.append(ParticipantSession.event_id.in_(load_test_event_ids))
@@ -285,16 +299,26 @@ def preview_test_data_cleanup(
     test_session_ids = [s.id for s in test_sessions]
 
     # 3. Identify test tournament results
-    result_filters = [
-        TournamentResult.register_number.ilike("RACE-%"),
-        TournamentResult.player_name.ilike("RaceTester%"),
-    ]
+    result_filters = []
     if test_session_ids:
         result_filters.append(TournamentResult.session_id.in_(test_session_ids))
     if load_test_event_ids:
         result_filters.append(TournamentResult.event_id.in_(load_test_event_ids))
 
-    test_results_count = db.query(TournamentResult).filter(or_(*result_filters)).count()
+    result_filters.extend([
+        TournamentResult.player_name.ilike("RaceTester%"),
+        TournamentResult.register_number.ilike("RACE-%"),
+        TournamentResult.player_name.ilike("Contestant_%"),
+        TournamentResult.register_number.ilike("REG-LOAD-%"),
+        TournamentResult.register_number.ilike("REG-B10-%"),
+        TournamentResult.register_number.ilike("REG-B25-%"),
+        TournamentResult.register_number.ilike("REG-B50-%"),
+        TournamentResult.player_name == "E2E Challenger",
+        TournamentResult.register_number == "REG-E2E-99",
+        TournamentResult.register_number.in_(["TEST001", "TEST002"]),
+    ])
+
+    test_results_count = db.query(TournamentResult).filter(or_(*result_filters)).count() if result_filters else 0
 
     # 4. Identify test question attempts
     test_attempts_count = db.query(QuestionAttempt).filter(
@@ -318,10 +342,11 @@ def clear_test_data(
     """
     Permanently delete ONLY test and load-test participant records.
     Deletes in strict dependency order:
-    1. Question attempts & Socket placements
-    2. Tournament results
-    3. Participant sessions
-    4. Load-test events (and their questions/sockets)
+    1. Question attempts
+    2. Socket placements
+    3. Tournament results
+    4. Participant sessions
+    5. Load-test events (and their questions/sockets)
     """
     # 1. Identify load-test events
     load_test_events = db.query(Event).filter(Event.custom_id.startswith("LOAD_TEST_EVT_")).all()
@@ -337,8 +362,20 @@ def clear_test_data(
 
     # 2. Identify test participant sessions
     session_filters = [
-        ParticipantSession.register_number.ilike("RACE-%"),
+        # Race load tests
         ParticipantSession.player_name.ilike("RaceTester%"),
+        ParticipantSession.register_number.ilike("RACE-%"),
+        # Concurrency load-test batches
+        ParticipantSession.player_name.ilike("Contestant_%"),
+        ParticipantSession.register_number.ilike("REG-LOAD-%"),
+        ParticipantSession.register_number.ilike("REG-B10-%"),
+        ParticipantSession.register_number.ilike("REG-B25-%"),
+        ParticipantSession.register_number.ilike("REG-B50-%"),
+        # E2E tests
+        ParticipantSession.player_name == "E2E Challenger",
+        ParticipantSession.register_number == "REG-E2E-99",
+        # Known scratch/test registrations
+        ParticipantSession.register_number.in_(["TEST001", "TEST002"]),
     ]
     if load_test_event_ids:
         session_filters.append(ParticipantSession.event_id.in_(load_test_event_ids))
@@ -347,16 +384,26 @@ def clear_test_data(
     test_session_ids = [s.id for s in test_sessions]
 
     # 3. Identify test tournament results
-    result_filters = [
-        TournamentResult.register_number.ilike("RACE-%"),
-        TournamentResult.player_name.ilike("RaceTester%"),
-    ]
+    result_filters = []
     if test_session_ids:
         result_filters.append(TournamentResult.session_id.in_(test_session_ids))
     if load_test_event_ids:
         result_filters.append(TournamentResult.event_id.in_(load_test_event_ids))
 
-    test_results = db.query(TournamentResult).filter(or_(*result_filters)).all()
+    result_filters.extend([
+        TournamentResult.player_name.ilike("RaceTester%"),
+        TournamentResult.register_number.ilike("RACE-%"),
+        TournamentResult.player_name.ilike("Contestant_%"),
+        TournamentResult.register_number.ilike("REG-LOAD-%"),
+        TournamentResult.register_number.ilike("REG-B10-%"),
+        TournamentResult.register_number.ilike("REG-B25-%"),
+        TournamentResult.register_number.ilike("REG-B50-%"),
+        TournamentResult.player_name == "E2E Challenger",
+        TournamentResult.register_number == "REG-E2E-99",
+        TournamentResult.register_number.in_(["TEST001", "TEST002"]),
+    ])
+
+    test_results = db.query(TournamentResult).filter(or_(*result_filters)).all() if result_filters else []
 
     # 4. Identify dependent attempts and placements
     if test_session_ids:
@@ -380,7 +427,7 @@ def clear_test_data(
             deleted_events=0,
         )
 
-    # Execute deletion in strict foreign-key order:
+    # Execute deletion in strict foreign-key dependency order:
     # 1. Question Attempts
     for a in test_attempts:
         db.delete(a)

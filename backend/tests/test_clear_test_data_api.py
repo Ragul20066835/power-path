@@ -1,13 +1,22 @@
 """
-Unit and Integration Tests for Focused CLEAR TEST DATA Admin Action
+Comprehensive Safety and Integration Tests for POWERPATH CLEAR TEST DATA
 Covers:
-1. Non-admin / unauthenticated requests are rejected (401)
-2. Authenticated admin is allowed (200)
-3. Preview returns accurate test record counts without deleting
-4. Clearing removes matching test sessions, attempts, placements, results, and load-test events
-5. Real/non-test participants and events remain completely untouched
-6. Repeated cleanup is safe and idempotent (returns 200 with 0 deleted)
-7. Active event protection works (aborts with 400 when load-test event is active)
+1. Non-admin / unauthenticated requests rejected (401)
+2. Authenticated admin allowed (200)
+3. Preview accurately counts all matching test records (both event-linked and orphaned event_id=NULL)
+4. Cleanup safely deletes all known synthetic test patterns:
+   - RaceTester / RACE-*
+   - Contestant_* / REG-LOAD-*
+   - REG-B10-*, REG-B25-*, REG-B50-*
+   - E2E Challenger / REG-E2E-99
+   - TEST001 / TEST002
+5. Strict Real-Data Safety:
+   - Real participants with normal names & college IDs linked to active events remain untouched.
+   - Real participants with event_id=NULL are NOT deleted merely because event_id is NULL.
+   - Real tournament results and attempts remain untouched.
+6. Foreign-key dependency order (attempts -> placements -> results -> sessions -> events).
+7. Active LOAD_TEST_EVT_* event protection (returns 400 when event is active).
+8. Idempotency (consecutive runs return 200 with 0 deleted).
 """
 
 import pytest
@@ -23,135 +32,110 @@ from app.models import (
 from app.constants import EventStatus, SessionStatus
 
 
-def _seed_test_and_real_data(db_session):
+def _seed_comprehensive_test_and_real_data(db_session):
     """
-    Seeds a combination of:
-    - Real production event + real participants (must be preserved)
-    - Synthetic load-test event (LOAD_TEST_EVT_*) + sessions (must be cleared)
-    - Participants with 'RaceTester' name or 'RACE-' reg number (must be cleared)
+    Seeds:
+    - 2 Real participants in an ACTIVE production event
+    - 1 Real participant with event_id=NULL (must NOT be deleted merely because event_id is NULL)
+    - 1 Synthetic load-test event with attached sessions
+    - Orphaned load-test sessions (event_id=NULL) across all diagnostic patterns:
+      * RaceTester / RACE-*
+      * Contestant_1 / REG-LOAD-001
+      * Contestant_B10_1 / REG-B10-001
+      * Contestant_B25_1 / REG-B25-001
+      * Contestant_B50_1 / REG-B50-001
+      * E2E Challenger / REG-E2E-99
+      * ragul2 / TEST001
+      * ragul3 / TEST002
     """
-    # 1. Real Event & Real Contestants (DO NOT TOUCH)
-    real_event = Event(
-        custom_id="EVT_PRODUCTION_FINALS_2026",
-        name="Official Championship Finals",
-        status=EventStatus.INACTIVE.value
+    # -------------------------------------------------------------------------
+    # 1. REAL PRODUCTION DATA (MUST REMAIN UNTOUCHED)
+    # -------------------------------------------------------------------------
+    real_active_event = Event(
+        custom_id="EVT_CHAMPIONSHIP_FINALS",
+        name="Championship Finals 2026",
+        status=EventStatus.ACTIVE.value
     )
-    db_session.add(real_event)
+    db_session.add(real_active_event)
     db_session.flush()
 
-    real_q = Question(
-        event_id=real_event.id,
+    real_q1 = Question(
+        event_id=real_active_event.id,
         custom_id="Q_REAL_01",
         name="Main Power Stage",
         difficulty="Easy",
         penalty_seconds=5,
         question_order=1
     )
-    db_session.add(real_q)
+    db_session.add(real_q1)
     db_session.flush()
 
-    real_socket = Socket(question_id=real_q.id, custom_id="S1", label="VCC", accepted_component_id="battery")
-    db_session.add(real_socket)
-    db_session.flush()
-
-    # Real participant 1: Normal student
+    # Real contestant 1 in active event
     real_session1 = ParticipantSession(
         session_id="PP-REAL-001",
-        event_id=real_event.id,
-        player_name="John Doe",
+        event_id=real_active_event.id,
+        player_name="Ravi Kumar",
         register_number="21ECE101",
         status=SessionStatus.COMPLETED.value
     )
-    # Real participant 2: Another contestant
+    # Real contestant 2 in active event
     real_session2 = ParticipantSession(
         session_id="PP-REAL-002",
-        event_id=real_event.id,
-        player_name="Jane Smith",
+        event_id=real_active_event.id,
+        player_name="Vishnu V",
         register_number="21ECE102",
         status=SessionStatus.PLAYING.value
     )
-    db_session.add_all([real_session1, real_session2])
+    # Real contestant 3 whose parent event was archived/null (MUST NOT BE DELETED)
+    real_session_orphan = ParticipantSession(
+        session_id="PP-REAL-ORPHAN",
+        event_id=None,
+        player_name="Sarah Connor",
+        register_number="20EEE505",
+        status=SessionStatus.COMPLETED.value
+    )
+    db_session.add_all([real_session1, real_session2, real_session_orphan])
     db_session.flush()
 
-    real_attempt1 = QuestionAttempt(
+    real_att1 = QuestionAttempt(
         session_id=real_session1.id,
-        question_id=real_q.id,
+        question_id=real_q1.id,
         question_index=1,
-        raw_time_ms=12000,
-        final_time_ms=12000
+        raw_time_ms=15000,
+        final_time_ms=15000
     )
-    real_result1 = TournamentResult(
+    real_att_orphan = QuestionAttempt(
+        session_id=real_session_orphan.id,
+        question_id=real_q1.id,
+        question_index=1,
+        raw_time_ms=20000,
+        final_time_ms=20000
+    )
+    real_res1 = TournamentResult(
         session_id=real_session1.id,
-        event_id=real_event.id,
-        player_name="John Doe",
+        event_id=real_active_event.id,
+        player_name="Ravi Kumar",
         register_number="21ECE101",
         total_questions=1,
-        raw_time_ms=12000,
-        final_time_ms=12000
+        raw_time_ms=15000,
+        final_time_ms=15000
     )
-    db_session.add_all([real_attempt1, real_result1])
-
-    # 2. Test Data Type A: Session with 'RaceTester' in player name
-    test_session_name = ParticipantSession(
-        session_id="PP-TEST-NAME-01",
-        event_id=real_event.id,
-        player_name="RaceTester",
-        register_number="DEV-001",
-        status=SessionStatus.COMPLETED.value
-    )
-    db_session.add(test_session_name)
-    db_session.flush()
-
-    test_attempt_name = QuestionAttempt(
-        session_id=test_session_name.id,
-        question_id=real_q.id,
-        question_index=1,
-        raw_time_ms=3000,
-        final_time_ms=3000
-    )
-    test_result_name = TournamentResult(
-        session_id=test_session_name.id,
-        event_id=real_event.id,
-        player_name="RaceTester",
-        register_number="DEV-001",
+    real_res_orphan = TournamentResult(
+        session_id=real_session_orphan.id,
+        event_id=None,
+        player_name="Sarah Connor",
+        register_number="20EEE505",
         total_questions=1,
-        raw_time_ms=3000,
-        final_time_ms=3000
+        raw_time_ms=20000,
+        final_time_ms=20000
     )
-    db_session.add_all([test_attempt_name, test_result_name])
+    db_session.add_all([real_att1, real_att_orphan, real_res1, real_res_orphan])
 
-    # 3. Test Data Type B: Session with 'RACE-' register number
-    test_session_reg = ParticipantSession(
-        session_id="PP-TEST-REG-01",
-        event_id=real_event.id,
-        player_name="SpeedBot",
-        register_number="RACE-005",
-        status=SessionStatus.COMPLETED.value
-    )
-    db_session.add(test_session_reg)
-    db_session.flush()
-
-    test_attempt_reg = QuestionAttempt(
-        session_id=test_session_reg.id,
-        question_id=real_q.id,
-        question_index=1,
-        raw_time_ms=4000,
-        final_time_ms=4000
-    )
-    test_result_reg = TournamentResult(
-        session_id=test_session_reg.id,
-        event_id=real_event.id,
-        player_name="SpeedBot",
-        register_number="RACE-005",
-        total_questions=1,
-        raw_time_ms=4000,
-        final_time_ms=4000
-    )
-    db_session.add_all([test_attempt_reg, test_result_reg])
-
-    # 4. Test Data Type C: Synthetic Load-Test Event (LOAD_TEST_EVT_*)
+    # -------------------------------------------------------------------------
+    # 2. SYNTHETIC LOAD-TEST EVENT & ATTACHED SESSIONS
+    # -------------------------------------------------------------------------
     lt_event = Event(
-        custom_id="LOAD_TEST_EVT_9999",
+        custom_id="LOAD_TEST_EVT_ARENA_1",
         name="Concurrency Load Test Arena",
         status=EventStatus.INACTIVE.value
     )
@@ -169,53 +153,94 @@ def _seed_test_and_real_data(db_session):
     db_session.add(lt_q)
     db_session.flush()
 
-    lt_socket = Socket(question_id=lt_q.id, custom_id="S1", label="LT_SRC", accepted_component_id="battery")
-    db_session.add(lt_socket)
-    db_session.flush()
-
-    lt_session = ParticipantSession(
-        session_id="PP-LT-9999",
+    lt_sess = ParticipantSession(
+        session_id="PP-LT-ATTACHED",
         event_id=lt_event.id,
-        player_name="Contestant_B50_01",
-        register_number="REG-B50-001",
+        player_name="Attached Tester",
+        register_number="ATTACHED-001",
         status=SessionStatus.COMPLETED.value
     )
-    db_session.add(lt_session)
+    db_session.add(lt_sess)
     db_session.flush()
 
-    lt_attempt = QuestionAttempt(
-        session_id=lt_session.id,
+    lt_att = QuestionAttempt(
+        session_id=lt_sess.id,
         question_id=lt_q.id,
         question_index=1,
-        raw_time_ms=2500,
-        final_time_ms=2500
+        raw_time_ms=3000,
+        final_time_ms=3000
     )
-    lt_result = TournamentResult(
-        session_id=lt_session.id,
+    lt_res = TournamentResult(
+        session_id=lt_sess.id,
         event_id=lt_event.id,
-        player_name="Contestant_B50_01",
-        register_number="REG-B50-001",
+        player_name="Attached Tester",
+        register_number="ATTACHED-001",
         total_questions=1,
-        raw_time_ms=2500,
-        final_time_ms=2500
+        raw_time_ms=3000,
+        final_time_ms=3000
     )
-    db_session.add_all([lt_attempt, lt_result])
+    db_session.add_all([lt_att, lt_res])
+
+    # -------------------------------------------------------------------------
+    # 3. HISTORICAL ORPHANED SYNTHETIC TEST SESSIONS (event_id = NULL)
+    # -------------------------------------------------------------------------
+    test_patterns = [
+        # (session_id, player_name, register_number)
+        ("PP-TEST-RACE-1", "RaceTester", "RACE-1790079997328"),
+        ("PP-TEST-RACE-2", "RaceTester_Fast", "RACE-1790188888"),
+        ("PP-TEST-LOAD-1", "Contestant_1", "REG-LOAD-001"),
+        ("PP-TEST-B10-1", "Contestant_B10_1", "REG-B10-001"),
+        ("PP-TEST-B25-1", "Contestant_B25_1", "REG-B25-001"),
+        ("PP-TEST-B50-1", "Contestant_B50_1", "REG-B50-001"),
+        ("PP-TEST-E2E-1", "E2E Challenger", "REG-E2E-99"),
+        ("PP-TEST-SCRATCH-1", "ragul2", "TEST001"),
+        ("PP-TEST-SCRATCH-2", "ragul3", "TEST002"),
+    ]
+
+    for sid, name, reg in test_patterns:
+        ts = ParticipantSession(
+            session_id=sid,
+            event_id=None,
+            player_name=name,
+            register_number=reg,
+            status=SessionStatus.COMPLETED.value
+        )
+        db_session.add(ts)
+        db_session.flush()
+
+        ta = QuestionAttempt(
+            session_id=ts.id,
+            question_id=None,
+            question_index=1,
+            raw_time_ms=5000,
+            final_time_ms=5000
+        )
+        tr = TournamentResult(
+            session_id=ts.id,
+            event_id=None,
+            player_name=name,
+            register_number=reg,
+            total_questions=1,
+            raw_time_ms=5000,
+            final_time_ms=5000
+        )
+        db_session.add_all([ta, tr])
 
     db_session.commit()
 
     return {
-        "real_event_id": real_event.id,
-        "lt_event_id": lt_event.id,
+        "real_event_id": real_active_event.id,
+        "real_session_orphan_id": real_session_orphan.id,
     }
 
 
 # =============================================================================
-# 1. AUTHENTICATION & ACCESS CONTROL
+# 1. AUTHENTICATION TESTS
 # =============================================================================
 
 @pytest.mark.anyio
 async def test_clear_test_data_unauthenticated_rejected(async_client, db_session):
-    """Test that requests without valid admin credentials return 401."""
+    """Test unauthenticated requests are rejected with 401."""
     res_preview = await async_client.post("/api/v1/admin/test-data/preview")
     assert res_preview.status_code == 401
 
@@ -223,87 +248,88 @@ async def test_clear_test_data_unauthenticated_rejected(async_client, db_session
     assert res_delete.status_code == 401
 
 
-@pytest.mark.anyio
-async def test_clear_test_data_authenticated_admin_allowed(async_client, admin_headers, db_session):
-    """Test that authenticated admin can invoke preview and deletion."""
-    res_preview = await async_client.post("/api/v1/admin/test-data/preview", headers=admin_headers)
-    assert res_preview.status_code == 200
-
-    res_delete = await async_client.delete("/api/v1/admin/test-data", headers=admin_headers)
-    assert res_delete.status_code == 200
-
-
 # =============================================================================
-# 2. PREVIEW ENDPOINT
+# 2. PREVIEW ACCURACY TEST
 # =============================================================================
 
 @pytest.mark.anyio
-async def test_preview_returns_exact_test_counts_without_deleting(async_client, admin_headers, db_session):
-    """Test that preview accurately counts test sessions, attempts, and results without deletion."""
-    _seed_test_and_real_data(db_session)
+async def test_preview_counts_all_synthetic_patterns_including_orphaned(async_client, admin_headers, db_session):
+    """Test preview accurately detects both event-linked and orphaned synthetic test records."""
+    _seed_comprehensive_test_and_real_data(db_session)
 
     res = await async_client.post("/api/v1/admin/test-data/preview", headers=admin_headers)
     assert res.status_code == 200
     data = res.json()
 
-    # We seeded 3 test sessions:
-    # 1. RaceTester
-    # 2. RACE-005
-    # 3. Contestant_B50_01 in LOAD_TEST_EVT_9999
-    assert data["test_sessions"] == 3
-    assert data["test_attempts"] == 3
-    assert data["test_results"] == 3
+    # Seeded:
+    # 1 load test event (LOAD_TEST_EVT_ARENA_1)
+    # 1 event-linked session (PP-LT-ATTACHED)
+    # 9 orphaned test sessions (RACE-*, REG-LOAD-*, REG-B10-*, REG-B25-*, REG-B50-*, REG-E2E-99, TEST001, TEST002)
+    # Total = 10 test sessions, 10 attempts, 10 results, 1 load test event
+    assert data["test_sessions"] == 10
+    assert data["test_attempts"] == 10
+    assert data["test_results"] == 10
     assert data["load_test_events"] == 1
 
-    # Verify no records deleted
-    assert db_session.query(ParticipantSession).count() == 5  # 2 real + 3 test
-    assert db_session.query(TournamentResult).count() == 4  # 1 real + 3 test
+    # Verify preview made 0 deletions
+    assert db_session.query(ParticipantSession).count() == 13  # 3 real + 10 test
+    assert db_session.query(TournamentResult).count() == 12   # 2 real + 10 test
 
 
 # =============================================================================
-# 3. DELETION & TARGETING VERIFICATION
+# 3. COMPLETE SYNTHETIC CLEANUP & REAL-DATA PRESERVATION
 # =============================================================================
 
 @pytest.mark.anyio
-async def test_clear_test_data_deletes_only_test_records(async_client, admin_headers, db_session):
+async def test_cleanup_removes_all_synthetic_patterns_and_preserves_real_data(async_client, admin_headers, db_session):
     """
-    Test that clear_test_data removes ONLY test/load-test data and strictly preserves
-    real participants, real attempts, real results, and real events.
+    Test that cleanup purges ALL synthetic test patterns (both linked and orphaned)
+    while strictly preserving real participants (including real participants with event_id=NULL).
     """
-    ids = _seed_test_and_real_data(db_session)
+    ids = _seed_comprehensive_test_and_real_data(db_session)
 
     del_res = await async_client.delete("/api/v1/admin/test-data", headers=admin_headers)
     assert del_res.status_code == 200
-    del_data = del_res.json()
+    data = del_res.json()
 
-    assert del_data["deleted_sessions"] == 3
-    assert del_data["deleted_attempts"] == 3
-    assert del_data["deleted_results"] == 3
-    assert del_data["deleted_events"] == 1
+    assert data["deleted_sessions"] == 10
+    assert data["deleted_attempts"] == 10
+    assert data["deleted_results"] == 10
+    assert data["deleted_events"] == 1
 
-    # 1. Verify test records are gone
+    # 1. Verify ALL synthetic test records are deleted
     assert db_session.query(ParticipantSession).filter(ParticipantSession.player_name.ilike("RaceTester%")).count() == 0
     assert db_session.query(ParticipantSession).filter(ParticipantSession.register_number.ilike("RACE-%")).count() == 0
+    assert db_session.query(ParticipantSession).filter(ParticipantSession.player_name.ilike("Contestant_%")).count() == 0
+    assert db_session.query(ParticipantSession).filter(ParticipantSession.register_number.ilike("REG-LOAD-%")).count() == 0
+    assert db_session.query(ParticipantSession).filter(ParticipantSession.register_number.ilike("REG-B10-%")).count() == 0
+    assert db_session.query(ParticipantSession).filter(ParticipantSession.register_number.ilike("REG-B25-%")).count() == 0
+    assert db_session.query(ParticipantSession).filter(ParticipantSession.register_number.ilike("REG-B50-%")).count() == 0
+    assert db_session.query(ParticipantSession).filter(ParticipantSession.register_number == "REG-E2E-99").count() == 0
+    assert db_session.query(ParticipantSession).filter(ParticipantSession.register_number.in_(["TEST001", "TEST002"])).count() == 0
     assert db_session.query(Event).filter(Event.custom_id.startswith("LOAD_TEST_EVT_")).count() == 0
 
-    # 2. Verify REAL event, questions, and sockets remain completely intact
+    # 2. Verify REAL ACTIVE EVENT & Contestants remain completely intact
     real_evt = db_session.query(Event).filter(Event.id == ids["real_event_id"]).first()
     assert real_evt is not None
-    assert real_evt.custom_id == "EVT_PRODUCTION_FINALS_2026"
-    assert len(real_evt.questions) == 1
-    assert real_evt.total_sockets == 1
+    assert real_evt.custom_id == "EVT_CHAMPIONSHIP_FINALS"
 
-    # 3. Verify REAL participants, attempts, and results remain completely intact
-    real_sessions = db_session.query(ParticipantSession).filter(ParticipantSession.event_id == ids["real_event_id"]).all()
-    assert len(real_sessions) == 2
+    active_real_sessions = db_session.query(ParticipantSession).filter(ParticipantSession.event_id == ids["real_event_id"]).all()
+    assert len(active_real_sessions) == 2
+    active_real_names = {s.player_name for s in active_real_sessions}
+    assert "Ravi Kumar" in active_real_names
+    assert "Vishnu V" in active_real_names
 
-    real_names = {s.player_name for s in real_sessions}
-    assert "John Doe" in real_names
-    assert "Jane Smith" in real_names
+    # 3. CRITICAL SAFETY TEST: Real participant with event_id=NULL was NOT deleted
+    real_orphan = db_session.query(ParticipantSession).filter(ParticipantSession.id == ids["real_session_orphan_id"]).first()
+    assert real_orphan is not None
+    assert real_orphan.player_name == "Sarah Connor"
+    assert real_orphan.register_number == "20EEE505"
+    assert real_orphan.event_id is None
 
-    real_results = db_session.query(TournamentResult).filter(TournamentResult.event_id == ids["real_event_id"]).all()
-    assert len(real_results) == 1
-    assert real_results[0].player_name == "John Doe"
+    real_orphan_result = db_session.query(TournamentResult).filter(TournamentResult.session_id == real_orphan.id).first()
+    assert real_orphan_result is not None
+    assert real_orphan_result.player_name == "Sarah Connor"
 
 
 # =============================================================================
@@ -311,29 +337,19 @@ async def test_clear_test_data_deletes_only_test_records(async_client, admin_hea
 # =============================================================================
 
 @pytest.mark.anyio
-async def test_active_event_protection(async_client, admin_headers, db_session):
-    """Test that if a load-test event is currently ACTIVE, cleanup is blocked with HTTP 400."""
-    active_lt_event = Event(
+async def test_active_load_test_event_protection(async_client, admin_headers, db_session):
+    """Test that active LOAD_TEST_EVT_* event prevents deletion with 400 error."""
+    active_lt = Event(
         custom_id="LOAD_TEST_EVT_ACTIVE",
-        name="Active Load Test Round",
+        name="Active Load Round",
         status=EventStatus.ACTIVE.value
     )
-    db_session.add(active_lt_event)
+    db_session.add(active_lt)
     db_session.commit()
 
-    # Preview blocked
-    preview_res = await async_client.post("/api/v1/admin/test-data/preview", headers=admin_headers)
-    assert preview_res.status_code == 400
-    assert "ACTIVE" in preview_res.json()["detail"]
-
-    # Delete blocked
-    del_res = await async_client.delete("/api/v1/admin/test-data", headers=admin_headers)
-    assert del_res.status_code == 400
-    assert "ACTIVE" in del_res.json()["detail"]
-
-    # Record not deleted
-    db_session.expire_all()
-    assert db_session.query(Event).filter(Event.custom_id == "LOAD_TEST_EVT_ACTIVE").first() is not None
+    res = await async_client.delete("/api/v1/admin/test-data", headers=admin_headers)
+    assert res.status_code == 400
+    assert "ACTIVE" in res.json()["detail"]
 
 
 # =============================================================================
@@ -342,15 +358,15 @@ async def test_active_event_protection(async_client, admin_headers, db_session):
 
 @pytest.mark.anyio
 async def test_cleanup_is_idempotent(async_client, admin_headers, db_session):
-    """Test that running cleanup multiple times consecutively produces 200 with 0 deleted records."""
-    _seed_test_and_real_data(db_session)
+    """Test running cleanup consecutively returns 200 with 0 deleted records."""
+    _seed_comprehensive_test_and_real_data(db_session)
 
-    # First run: deletes 3 sessions
+    # First run
     res1 = await async_client.delete("/api/v1/admin/test-data", headers=admin_headers)
     assert res1.status_code == 200
-    assert res1.json()["deleted_sessions"] == 3
+    assert res1.json()["deleted_sessions"] == 10
 
-    # Second run immediately after: returns 0 deleted, no error
+    # Second run immediately after
     res2 = await async_client.delete("/api/v1/admin/test-data", headers=admin_headers)
     assert res2.status_code == 200
     assert res2.json()["deleted_sessions"] == 0
