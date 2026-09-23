@@ -17,16 +17,30 @@ import {
 /**
  * Home - Futuristic Electronics Tournament Landing Screen
  */
-export function Home({ activeEvent, settings, onStartGame }) {
+export function Home({ activeEvent, settings, serverSyncError, onRetry, onStartGame }) {
+  const totalQ = Number(
+    activeEvent?.totalQuestions !== undefined && activeEvent?.totalQuestions !== null
+      ? activeEvent.totalQuestions
+      : activeEvent?.questions?.length || 0
+  );
+  const calculatedSockets = (activeEvent?.questions || []).reduce((sum, q) => sum + (q.slots?.length || q.sockets?.length || 0), 0);
+  const totalSockets = Number(
+    activeEvent?.totalSockets !== undefined && activeEvent?.totalSockets !== null
+      ? activeEvent.totalSockets
+      : calculatedSockets
+  );
+
   const isEventOpen =
     (settings?.eventStatus === 'OPEN' || !settings?.eventStatus) &&
     activeEvent &&
-    activeEvent.questions?.length > 0;
+    activeEvent.status === 'ACTIVE' &&
+    totalQ > 0 &&
+    !serverSyncError;
 
   const questions = activeEvent?.questions || [];
-  const questionCount = questions.length;
-  const totalSlots = questions.reduce((sum, q) => sum + (q.slots?.length || 0), 0);
-  const eventPenalty = questions[0]?.penaltySeconds || 5;
+  const questionCount = totalQ;
+  const totalSlots = totalSockets;
+  const eventPenalty = questions[0]?.penaltySeconds || settings?.defaultPenaltySeconds || 5;
 
   return (
     <div className="home-page-container">
@@ -56,7 +70,7 @@ export function Home({ activeEvent, settings, onStartGame }) {
         <div className="hero-active-event-banner">
           <div className="active-event-label-row">
             <span className="active-event-sub">ACTIVE EVENT</span>
-            <span className="active-event-pill font-mono">{activeEvent?.id || 'CHAMPIONSHIP'}</span>
+            <span className="active-event-pill font-mono">{activeEvent?.customId || activeEvent?.id || 'CHAMPIONSHIP'}</span>
           </div>
           <div className="active-event-main-name">
             {activeEvent?.name || 'POWERPATH — Championship Round'}
@@ -64,8 +78,34 @@ export function Home({ activeEvent, settings, onStartGame }) {
         </div>
       </section>
 
+      {/* Server Sync Error Banner if backend cannot be reached */}
+      {serverSyncError && (
+        <div className="event-paused-banner server-sync-error animate-shake" role="alert" style={{ borderColor: 'rgba(239, 68, 68, 0.4)', background: 'rgba(239, 68, 68, 0.1)' }}>
+          <div className="paused-icon-wrap" style={{ background: 'rgba(239, 68, 68, 0.2)' }}>
+            <ShieldAlert size={20} className="text-rose-400" />
+          </div>
+          <div className="paused-text" style={{ flex: 1 }}>
+            <strong className="text-rose-400">
+              SERVER SYNC ERROR: UNABLE TO CONNECT TO TOURNAMENT SERVER
+            </strong>
+            <p className="text-rose-200">
+              {serverSyncError}
+            </p>
+          </div>
+          {onRetry && (
+            <button
+              type="button"
+              className="btn btn-secondary text-xs px-3 py-1.5"
+              onClick={onRetry}
+            >
+              Retry Connection
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Maintenance / Paused Banner if event is closed */}
-      {!isEventOpen && (
+      {!serverSyncError && !isEventOpen && (
         <div className="event-paused-banner animate-shake" role="status">
           <div className="paused-icon-wrap">
             <Lock size={20} className="text-amber-400" />
@@ -75,13 +115,15 @@ export function Home({ activeEvent, settings, onStartGame }) {
               TOURNAMENT STATUS:{' '}
               {!activeEvent
                 ? 'NO ACTIVE EVENT'
-                : activeEvent.questions?.length === 0
+                : totalQ === 0
                 ? 'EVENT HAS 0 QUESTIONS'
                 : settings?.eventStatus || 'PAUSED'}
             </strong>
             <p>
               {!activeEvent
                 ? 'No tournament event is currently active. Please ask an administrator to activate an event.'
+                : totalQ === 0
+                ? 'The active event has no questions configured. Please ask an administrator to add challenges.'
                 : 'Registration and gameplay are temporarily paused by event administrators.'}
             </p>
           </div>
@@ -102,7 +144,9 @@ export function Home({ activeEvent, settings, onStartGame }) {
               </div>
               <h3 className="form-title text-amber-400 mt-3">SESSION REGISTRATION CLOSED</h3>
               <p className="form-subtitle mt-2">
-                {!activeEvent
+                {serverSyncError
+                  ? 'Please reconnect to tournament server to proceed.'
+                  : !activeEvent
                   ? 'No active event is currently configured for player registration.'
                   : 'Please wait for tournament administrators to open the session.'}
               </p>
@@ -126,7 +170,7 @@ export function Home({ activeEvent, settings, onStartGame }) {
               </div>
               <span className={`badge-pill ${activeEvent ? 'badge-live' : 'badge-idle'}`}>
                 <Radio size={11} className="animate-pulse" />
-                <span>{activeEvent?.id || 'NO EVENT'}</span>
+                <span>{activeEvent?.customId || activeEvent?.id || 'NO EVENT'}</span>
               </span>
             </div>
 

@@ -56,6 +56,7 @@ export function App() {
   const [participants, setParticipants] = useState(() => getParticipants());
   const [results, setResults] = useState(() => getLocalResults());
   const [activeEvent, setActiveEvent] = useState(null);
+  const [serverSyncError, setServerSyncError] = useState(null);
 
   // Recovery Loading & Connection State
   const [isSessionRecovering, setIsSessionRecovering] = useState(() => {
@@ -196,6 +197,7 @@ export function App() {
   // --------------------------------------------------------------------------
   const loadInitialData = useCallback(async () => {
     setSessionRecoveryError(null);
+    setServerSyncError(null);
     try {
       // 1. Fetch live tournament settings
       try {
@@ -204,19 +206,29 @@ export function App() {
           setSettings(liveSettings);
         }
       } catch (err) {
-        console.warn('Could not fetch remote settings, using local fallback:', err.message);
+        console.warn('Could not fetch remote settings:', err.message);
       }
 
       // 2. Fetch active event from backend
       let remoteActiveEvent = null;
+      let activeEventFetchFailed = false;
       try {
         remoteActiveEvent = await apiService.getActiveEvent();
       } catch (err) {
         console.warn('Could not fetch remote active event:', err.message);
+        if (err.status !== 404) {
+          activeEventFetchFailed = true;
+          setServerSyncError(err.message || 'Unable to connect to POWERPATH tournament server.');
+        }
       }
 
-      const effectiveActiveEvent = remoteActiveEvent || getLocalActiveEvent() || null;
-      setActiveEvent(effectiveActiveEvent);
+      if (activeEventFetchFailed) {
+        setActiveEvent(null);
+      } else {
+        setActiveEvent(remoteActiveEvent);
+      }
+
+      const effectiveActiveEvent = remoteActiveEvent;
 
       // 3. Attempt Authoritative Session Recovery
       const savedSessionId = apiService.getSavedSessionId();
@@ -974,6 +986,8 @@ export function App() {
           <Home
             activeEvent={activeEvent}
             settings={settings}
+            serverSyncError={serverSyncError}
+            onRetry={loadInitialData}
             onStartGame={handleStartGame}
           />
         ) : (

@@ -50,7 +50,7 @@ class TelemetrySummary(BaseModel):
 
 class ParticipantTelemetryItem(BaseModel):
     id: StrId
-    session_id: str
+    session_id: StrId
     player_name: str
     register_number: str
     status: str

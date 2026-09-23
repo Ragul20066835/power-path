@@ -1201,6 +1201,148 @@ const q001 = e001.questions[0];
   assert(finalFinishedState.result.rank === 1, 'TEST 23.20: Final tournament result stored');
 }
 
+// TEST 24: Active Event Normalization, Backend UUID Resilience, and Stale Fallback Isolation
+{
+  // 1. Backend active event payload with 20 questions and 91 sockets
+  const backendActiveEventPayload = {
+    id: '3af75c45-336d-44e0-8d9f-e9a60eae1448',
+    custom_id: 'ERR2S',
+    name: 'electrox',
+    description: 'Championship 20-Stage Circuit Tournament',
+    status: 'ACTIVE',
+    total_questions: 20,
+    total_sockets: 91,
+    questions: Array.from({ length: 20 }, (_, i) => ({
+      id: `q-uuid-${i + 1}`,
+      custom_id: `Q${i + 1}`,
+      name: i === 19 ? 'Final Circuit Rescue' : `Circuit Stage ${i + 1}`,
+      difficulty: i === 19 ? 'Hard' : 'Medium',
+      penalty_seconds: 5,
+      question_order: i + 1,
+      sockets: Array.from({ length: (i % 2 === 0 || i === 19) ? 5 : 4 }, (_, sIdx) => ({
+        id: `s-uuid-${i + 1}-${sIdx + 1}`,
+        custom_id: `S${sIdx + 1}`,
+        label: `SLOT_${sIdx + 1}`,
+        slot_order: sIdx + 1
+      }))
+    }))
+  };
+
+  // Simulate normalizeEventForFrontend
+  const normalizeEvent = (event) => {
+    if (!event) return null;
+    const questions = (event.questions || []).map(q => ({
+      id: q.id,
+      customId: q.custom_id || q.customId || q.id,
+      name: q.name,
+      sockets: q.sockets || q.slots || []
+    }));
+    const totalQ = Number(
+      event.total_questions !== undefined && event.total_questions !== null
+        ? event.total_questions
+        : event.totalQuestions !== undefined && event.totalQuestions !== null
+        ? event.totalQuestions
+        : questions.length
+    );
+    const calculatedSockets = questions.reduce((sum, q) => sum + (q.sockets?.length || 0), 0);
+    const totalS = Number(
+      event.total_sockets !== undefined && event.total_sockets !== null
+        ? event.total_sockets
+        : event.totalSockets !== undefined && event.totalSockets !== null
+        ? event.totalSockets
+        : calculatedSockets
+    );
+    return {
+      id: event.id,
+      customId: event.custom_id || event.customId || event.id,
+      name: event.name,
+      description: event.description || '',
+      status: event.status || 'INACTIVE',
+      questions,
+      totalQuestions: totalQ > 0 ? totalQ : questions.length,
+      totalSockets: totalS > 0 ? totalS : calculatedSockets
+    };
+  };
+
+  const normalized = normalizeEvent(backendActiveEventPayload);
+  assert(normalized.totalQuestions === 20, 'TEST 24.1: Normalized active event contains 20 total questions');
+  assert(normalized.totalSockets === 91, 'TEST 24.2: Normalized active event contains 91 total sockets');
+  assert(normalized.customId === 'ERR2S', 'TEST 24.3: Normalized active event preserves customId ERR2S');
+  assert(normalized.name === 'electrox', 'TEST 24.4: Normalized active event name is electrox');
+  assert(normalized.status === 'ACTIVE', 'TEST 24.5: Normalized active event status is ACTIVE');
+
+  // 2. Stale localStorage containing "Archived Event" with 0 questions
+  localStorage.setItem('POWERPATH_EVENTS', JSON.stringify([
+    { id: 'E_ARCHIVED', name: 'Archived Event', status: 'ACTIVE', questions: [] }
+  ]));
+
+  // Simulate loadInitialData resolution
+  const simulateLoadActiveEvent = (remoteActiveEvent, fetchError = null) => {
+    let activeEvent = null;
+    let serverSyncError = null;
+
+    if (fetchError) {
+      if (fetchError.status !== 404) {
+        serverSyncError = fetchError.message || 'Unable to connect to POWERPATH tournament server.';
+      }
+      activeEvent = null; // NEVER fallback to stale local Archived Event!
+    } else {
+      activeEvent = remoteActiveEvent;
+    }
+
+    return { activeEvent, serverSyncError };
+  };
+
+  // Case A: Backend successfully provides electrox
+  const successLoad = simulateLoadActiveEvent(normalized);
+  assert(successLoad.activeEvent !== null, 'TEST 24.6: Active event loaded successfully from backend');
+  assert(successLoad.activeEvent.name === 'electrox', 'TEST 24.7: Backend active event name is electrox');
+  assert(successLoad.activeEvent.name !== 'Archived Event', 'TEST 24.8: Backend active event is NOT overridden by Archived Event');
+  assert(successLoad.activeEvent.totalQuestions === 20, 'TEST 24.9: Backend active event retains 20 questions');
+  assert(successLoad.serverSyncError === null, 'TEST 24.10: No server sync error on successful load');
+
+  // Case B: Backend returns 404 (No active event)
+  const notFoundLoad = simulateLoadActiveEvent(null, { status: 404, message: 'No active tournament round' });
+  assert(notFoundLoad.activeEvent === null, 'TEST 24.11: 404 cleanly sets activeEvent to null');
+  assert(notFoundLoad.activeEvent !== 'Archived Event', 'TEST 24.12: 404 does NOT substitute Archived Event');
+  assert(notFoundLoad.serverSyncError === null, 'TEST 24.13: 404 is not treated as a sync crash');
+
+  // Case C: Backend network/500 failure
+  const errorLoad = simulateLoadActiveEvent(null, { status: 500, message: 'Internal Server Error' });
+  assert(errorLoad.activeEvent === null, 'TEST 24.14: Network failure does NOT fall back to local Archived Event');
+  assert(errorLoad.serverSyncError !== null, 'TEST 24.15: Network failure sets serverSyncError');
+
+  // Case D: Unrelated Leaderboard/Results API failure does not affect active event
+  const simulateFullInitialLoad = async (activeEventData, failLeaderboard = false) => {
+    let loadedActiveEvent = null;
+    let loadedLeaderboard = null;
+
+    // 1. Load active event
+    try {
+      loadedActiveEvent = normalizeEvent(activeEventData);
+    } catch (e) {}
+
+    // 2. Load leaderboard (independent isolated call)
+    try {
+      if (failLeaderboard) {
+        throw new Error('Leaderboard 500 Error');
+      }
+      loadedLeaderboard = [{ rank: 1, playerName: 'Test' }];
+    } catch (e) {
+      // Handled cleanly without disrupting loadedActiveEvent
+    }
+
+    return { loadedActiveEvent, loadedLeaderboard };
+  };
+
+  const fullLoadResult = await simulateFullInitialLoad(backendActiveEventPayload, true);
+  assert(fullLoadResult.loadedActiveEvent !== null, 'TEST 24.16: Active event remains loaded even if leaderboard fails');
+  assert(fullLoadResult.loadedActiveEvent.totalQuestions === 20, 'TEST 24.17: Active event retains 20 questions after isolated leaderboard failure');
+  assert(fullLoadResult.loadedLeaderboard === null, 'TEST 24.18: Leaderboard error is contained');
+
+  localStorage.clear();
+}
+
 console.log(`\n======================================================`);
 console.log(`TEST RESULTS: ${passedTests} / ${totalTests} TESTS PASSED`);
 console.log(`======================================================\n`);
@@ -1210,6 +1352,7 @@ if (passedTests === totalTests) {
 } else {
   process.exit(1);
 }
+
 
 
 

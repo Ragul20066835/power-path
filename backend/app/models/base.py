@@ -77,6 +77,16 @@ class Event(Base):
     sessions = relationship("ParticipantSession", back_populates="event")
     results = relationship("TournamentResult", back_populates="event")
 
+    @property
+    def total_questions(self) -> int:
+        return len(self.questions) if self.questions else 0
+
+    @property
+    def total_sockets(self) -> int:
+        if not self.questions:
+            return 0
+        return sum(len(q.sockets) if q.sockets else 0 for q in self.questions)
+
     def __repr__(self):
         return f"<Event {self.custom_id}: {self.name} [{self.status}]>"
 

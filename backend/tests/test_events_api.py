@@ -233,3 +233,64 @@ async def test_get_active_event_with_uuid_model_ids(async_client, db_session, mo
     # 4. Critical security: accepted_component_id is NOT exposed in public response
     assert "accepted_component_id" not in s_data
 
+
+@pytest.mark.anyio
+async def test_active_event_with_20_questions_and_total_counts(async_client, db_session):
+    """
+    Regression Test:
+    1. Active event with 20 questions and 91 sockets returns total_questions = 20 and total_sockets = 91.
+    2. Event custom_id ('ERR2S') and name ('electrox') are preserved.
+    3. Status is 'ACTIVE'.
+    4. Secret accepted_component_id is stripped from public view.
+    """
+    event = Event(
+        custom_id="ERR2S",
+        name="electrox",
+        description="20 Stage Electronics Tournament",
+        status="ACTIVE"
+    )
+    db_session.add(event)
+    db_session.flush()
+
+    total_sockets_count = 0
+    for i in range(1, 21):
+        q = Question(
+            event_id=event.id,
+            custom_id=f"Q{i}",
+            name=f"Circuit Stage {i}",
+            difficulty="Medium",
+            penalty_seconds=5,
+            question_order=i
+        )
+        db_session.add(q)
+        db_session.flush()
+
+        # Add sockets (e.g. 5 for final, 4 or 5 for others)
+        num_sockets = 5 if (i % 2 == 0 or i == 20) else 4
+        for s_idx in range(1, num_sockets + 1):
+            s = Socket(
+                question_id=q.id,
+                custom_id=f"S{s_idx}",
+                label=f"SLOT_{s_idx}",
+                accepted_component_id="resistor",
+                slot_order=s_idx
+            )
+            db_session.add(s)
+            total_sockets_count += 1
+
+    db_session.commit()
+
+    res = await async_client.get("/api/v1/events/active")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["custom_id"] == "ERR2S"
+    assert data["name"] == "electrox"
+    assert data["status"] == "ACTIVE"
+    assert data["total_questions"] == 20
+    assert data["total_sockets"] == total_sockets_count
+    assert len(data["questions"]) == 20
+    for q_data in data["questions"]:
+        for s_data in q_data["sockets"]:
+            assert "accepted_component_id" not in s_data
+
+

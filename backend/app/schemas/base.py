@@ -172,6 +172,7 @@ class QuestionAdmin(QuestionBase):
 
 
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # 6. EVENT SCHEMAS
 # -----------------------------------------------------------------------------
 class EventBase(BaseModel):
@@ -179,6 +180,8 @@ class EventBase(BaseModel):
     name: str
     description: Optional[str] = None
     status: str = "INACTIVE"
+    total_questions: Optional[int] = None
+    total_sockets: Optional[int] = None
 
 
 class EventCreate(EventBase):
@@ -219,7 +222,7 @@ class SessionCreate(BaseModel):
 
 class SessionPublic(BaseModel):
     id: StrId
-    session_id: str
+    session_id: StrId
     event_id: OptionalStrId = None
     player_name: str
     register_number: str
@@ -249,7 +252,7 @@ class AttemptCreate(BaseModel):
 
 class AttemptPublic(BaseModel):
     id: StrId
-    session_id: str
+    session_id: StrId
     question_id: OptionalStrId = None
     question_index: int
     raw_time_ms: int
@@ -266,7 +269,7 @@ class AttemptPublic(BaseModel):
 # -----------------------------------------------------------------------------
 class ResultPublic(BaseModel):
     id: StrId
-    session_id: str
+    session_id: StrId
     event_id: OptionalStrId = None
     player_name: str
     register_number: str

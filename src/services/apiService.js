@@ -47,7 +47,21 @@ function normalizeQuestionForFrontend(q) {
 function normalizeEventForFrontend(event) {
   if (!event) return null;
   const questions = (event.questions || []).map(normalizeQuestionForFrontend);
-  const totalQ = Number(event.total_questions || event.totalQuestions || questions.length || 0);
+  const totalQ = Number(
+    event.total_questions !== undefined && event.total_questions !== null
+      ? event.total_questions
+      : event.totalQuestions !== undefined && event.totalQuestions !== null
+      ? event.totalQuestions
+      : questions.length
+  );
+  const calculatedSockets = questions.reduce((sum, q) => sum + (q.sockets?.length || q.slots?.length || 0), 0);
+  const totalS = Number(
+    event.total_sockets !== undefined && event.total_sockets !== null
+      ? event.total_sockets
+      : event.totalSockets !== undefined && event.totalSockets !== null
+      ? event.totalSockets
+      : calculatedSockets
+  );
   return {
     id: event.id,
     customId: event.custom_id || event.customId || event.id,
@@ -55,7 +69,8 @@ function normalizeEventForFrontend(event) {
     description: event.description || '',
     status: event.status || 'INACTIVE',
     questions,
-    totalQuestions: totalQ > 0 ? totalQ : questions.length
+    totalQuestions: totalQ > 0 ? totalQ : questions.length,
+    totalSockets: totalS > 0 ? totalS : calculatedSockets
   };
 }
 

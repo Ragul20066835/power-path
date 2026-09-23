@@ -80,7 +80,7 @@ class QuestionCompleteRequest(BaseModel):
 
 
 class QuestionCompleteResponse(BaseModel):
-    session_id: str
+    session_id: StrId
     question_index: int
     has_next_question: bool
     next_question: Optional[QuestionPublic] = None
@@ -95,7 +95,7 @@ class SessionFinishRequest(BaseModel):
 
 
 class SessionStateResponse(BaseModel):
-    session_id: str
+    session_id: StrId
     player_name: str
     register_number: str
     status: str
