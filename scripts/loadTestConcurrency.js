@@ -4,7 +4,29 @@
  * heartbeat load, admin live monitor performance, and full DB integrity for 10, 25, and 50 simultaneous players.
  */
 
-const BASE_URL = 'http://127.0.0.1:8000';
+const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:8000';
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'AdminPassword123!';
+
+// Production Safety Guard: prevent accidental execution against remote URLs
+function checkProductionSafety() {
+  const isLocal =
+    BASE_URL.includes('localhost') ||
+    BASE_URL.includes('127.0.0.1') ||
+    BASE_URL.includes('0.0.0.0');
+
+  if (!isLocal) {
+    if (process.env.ALLOW_PRODUCTION_LOAD_TEST !== 'true') {
+      console.error('\n⛔ PRODUCTION SAFETY GUARD TRIGGERED ⛔');
+      console.error(`Target BASE_URL (${BASE_URL}) is a remote/production environment.`);
+      console.error('To run against a remote environment, you must explicitly set:');
+      console.error('  ALLOW_PRODUCTION_LOAD_TEST=true');
+      console.error('Aborting execution to prevent accidental production load testing.\n');
+      process.exit(1);
+    }
+    console.log('⚠️ RUNNING LOAD TEST AGAINST REMOTE/PRODUCTION ENVIRONMENT (ALLOW_PRODUCTION_LOAD_TEST=true) ⚠️\n');
+  }
+}
 
 // Timing collector for percentile calculation
 class MetricsCollector {
@@ -118,13 +140,13 @@ async function timedFetch(path, options = {}, timeoutMs = 15000) {
   }
 }
 
-// Ensure an active event exists for testing
+// Ensure an isolated tournament event exists for testing (status: INACTIVE to protect production)
 async function setupActiveTournamentEvent() {
-  // Login as admin
+  // Login as admin using configured credentials
   const loginRes = await timedFetch('/api/v1/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: 'admin', password: 'AdminPassword123!' })
+    body: JSON.stringify({ username: ADMIN_USERNAME, password: ADMIN_PASSWORD })
   });
 
   let adminToken = loginRes.ok ? loginRes.data.access_token : null;
@@ -132,9 +154,13 @@ async function setupActiveTournamentEvent() {
     const seedLogin = await timedFetch('/api/v1/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: 'testadmin', password: 'AdminPassword123!' })
+      body: JSON.stringify({ username: 'testadmin', password: ADMIN_PASSWORD })
     });
     adminToken = seedLogin.data?.access_token;
+  }
+
+  if (!adminToken) {
+    throw new Error(`Admin authentication failed for user '${ADMIN_USERNAME}'. Please check credentials.`);
   }
 
   const customEventId = `LOAD_TEST_EVT_${Date.now()}`;
@@ -142,7 +168,7 @@ async function setupActiveTournamentEvent() {
     custom_id: customEventId,
     name: 'High-Concurrency Load Arena',
     description: 'Automated 50-player concurrency test arena',
-    status: 'ACTIVE',
+    status: 'INACTIVE', // CRITICAL: NEVER activate load test events to protect production tournament rounds
     questions: [
       {
         custom_id: 'Q_CONCUR_1',
@@ -178,7 +204,11 @@ async function setupActiveTournamentEvent() {
     body: JSON.stringify(eventPayload)
   });
 
-  return { eventId: createRes.data.id, adminToken };
+  if (!createRes.ok || !createRes.data?.id) {
+    throw new Error(`Failed to create load test event: HTTP ${createRes.status} - ${JSON.stringify(createRes.data)}`);
+  }
+
+  return { eventId: createRes.data.id, customEventId, adminToken };
 }
 
 /**
@@ -600,65 +630,94 @@ async function verifyDatabaseIntegrity(eventId, allBatchesResults, adminToken) {
 
 // Master Suite Execution
 async function runPhase5MasterLoadSuite() {
+  checkProductionSafety();
+
   console.log('================================================================');
   console.log('⚡ POWERPATH PHASE 5 HIGH-CONCURRENCY & LOAD TEST SUITE ⚡');
+  console.log(`Target BASE_URL: ${BASE_URL}`);
   console.log('================================================================\n');
 
-  console.log('Setting up dedicated load-test arena event...');
-  const { eventId, adminToken } = await setupActiveTournamentEvent();
-  console.log(`Arena initialized (Event ID: ${eventId})\n`);
+  let testEventContext = null;
 
-  // 1. Batch 10 Concurrent Players
-  console.log('▶ Running 10 Concurrent Players Test...');
-  const res10 = await runConcurrentBatch(10, eventId, '10 Concurrent Players', 'B10');
-  console.log(`✔ 10-Player Batch Complete: ${res10.playersSucceeded}/10 succeeded (p50: ${res10.stats.p50}ms, p95: ${res10.stats.p95}ms, max: ${res10.stats.max}ms)\n`);
+  try {
+    console.log('Setting up dedicated load-test arena event (status: INACTIVE)...');
+    testEventContext = await setupActiveTournamentEvent();
+    const { eventId, adminToken } = testEventContext;
+    console.log(`Arena initialized (Event ID: ${eventId})\n`);
 
-  // 2. Batch 25 Concurrent Players
-  console.log('▶ Running 25 Concurrent Players Test...');
-  const res25 = await runConcurrentBatch(25, eventId, '25 Concurrent Players', 'B25');
-  console.log(`✔ 25-Player Batch Complete: ${res25.playersSucceeded}/25 succeeded (p50: ${res25.stats.p50}ms, p95: ${res25.stats.p95}ms, max: ${res25.stats.max}ms)\n`);
+    // 1. Batch 10 Concurrent Players
+    console.log('▶ Running 10 Concurrent Players Test...');
+    const res10 = await runConcurrentBatch(10, eventId, '10 Concurrent Players', 'B10');
+    console.log(`✔ 10-Player Batch Complete: ${res10.playersSucceeded}/10 succeeded (p50: ${res10.stats.p50}ms, p95: ${res10.stats.p95}ms, max: ${res10.stats.max}ms)\n`);
 
-  // 3. Batch 50 Concurrent Players
-  console.log('▶ Running 50 Concurrent Players Test...');
-  const res50 = await runConcurrentBatch(50, eventId, '50 Concurrent Players', 'B50');
-  console.log(`✔ 50-Player Batch Complete: ${res50.playersSucceeded}/50 succeeded (p50: ${res50.stats.p50}ms, p95: ${res50.stats.p95}ms, max: ${res50.stats.max}ms)\n`);
+    // 2. Batch 25 Concurrent Players
+    console.log('▶ Running 25 Concurrent Players Test...');
+    const res25 = await runConcurrentBatch(25, eventId, '25 Concurrent Players', 'B25');
+    console.log(`✔ 25-Player Batch Complete: ${res25.playersSucceeded}/25 succeeded (p50: ${res25.stats.p50}ms, p95: ${res25.stats.p95}ms, max: ${res25.stats.max}ms)\n`);
 
-  // 4. Concurrent Race Condition Stress
-  console.log('▶ Running Concurrent Race Condition & Idempotency Stress Test...');
-  const raceResults = await testRaceConditions(eventId);
-  console.log(`✔ Race Conditions Test Complete (p50: ${raceResults.stats.p50}ms, p95: ${raceResults.stats.p95}ms)\n`);
+    // 3. Batch 50 Concurrent Players
+    console.log('▶ Running 50 Concurrent Players Test...');
+    const res50 = await runConcurrentBatch(50, eventId, '50 Concurrent Players', 'B50');
+    console.log(`✔ 50-Player Batch Complete: ${res50.playersSucceeded}/50 succeeded (p50: ${res50.stats.p50}ms, p95: ${res50.stats.p95}ms, max: ${res50.stats.max}ms)\n`);
 
-  // 5. 50-Player Heartbeat Load
-  console.log('▶ Running 50-Player Concurrent Heartbeat Load Test (150 heartbeat requests)...');
-  const validSessions50 = res50.playerResults.filter(r => r.stepsSuccess && r.sessionId);
-  const heartbeatStats = await testHeartbeatLoad(validSessions50);
-  console.log(`✔ Heartbeat Load Complete (p50: ${heartbeatStats.p50}ms, p95: ${heartbeatStats.p95}ms, max: ${heartbeatStats.max}ms)\n`);
+    // 4. Concurrent Race Condition Stress
+    console.log('▶ Running Concurrent Race Condition & Idempotency Stress Test...');
+    const raceResults = await testRaceConditions(eventId);
+    console.log(`✔ Race Conditions Test Complete (p50: ${raceResults.stats.p50}ms, p95: ${raceResults.stats.p95}ms)\n`);
 
-  // 6. Admin Live Monitor Under Load
-  console.log('▶ Running Admin Live Monitor Under Load Test...');
-  const adminMonitorResults = await testAdminMonitorUnderLoad(adminToken, eventId);
-  console.log(`✔ Admin Live Monitor Complete (p50: ${adminMonitorResults.stats.p50}ms, p95: ${adminMonitorResults.stats.p95}ms)\n`);
+    // 5. 50-Player Heartbeat Load
+    console.log('▶ Running 50-Player Concurrent Heartbeat Load Test (150 heartbeat requests)...');
+    const validSessions50 = res50.playerResults.filter(r => r.stepsSuccess && r.sessionId);
+    const heartbeatStats = await testHeartbeatLoad(validSessions50);
+    console.log(`✔ Heartbeat Load Complete (p50: ${heartbeatStats.p50}ms, p95: ${heartbeatStats.p95}ms, max: ${heartbeatStats.max}ms)\n`);
 
-  // 7. Database Integrity Verification
-  console.log('▶ Running Database Integrity & Cross-Contamination Audit...');
-  const allBatches = [...res10.playerResults, ...res25.playerResults, ...res50.playerResults];
-  const dbIntegrity = await verifyDatabaseIntegrity(eventId, allBatches, adminToken);
-  console.log('✔ Database Integrity Audit Complete.\n');
+    // 6. Admin Live Monitor Under Load
+    console.log('▶ Running Admin Live Monitor Under Load Test...');
+    const adminMonitorResults = await testAdminMonitorUnderLoad(adminToken, eventId);
+    console.log(`✔ Admin Live Monitor Complete (p50: ${adminMonitorResults.stats.p50}ms, p95: ${adminMonitorResults.stats.p95}ms)\n`);
 
-  // Summary Output
-  const summary = {
-    batch10: res10,
-    batch25: res25,
-    batch50: res50,
-    raceResults,
-    heartbeatStats,
-    adminMonitorResults,
-    dbIntegrity
-  };
+    // 7. Database Integrity Verification
+    console.log('▶ Running Database Integrity & Cross-Contamination Audit...');
+    const allBatches = [...res10.playerResults, ...res25.playerResults, ...res50.playerResults];
+    const dbIntegrity = await verifyDatabaseIntegrity(eventId, allBatches, adminToken);
+    console.log('✔ Database Integrity Audit Complete.\n');
 
-  console.log('================ JSON SUMMARY OUTPUT ================');
-  console.log(JSON.stringify(summary, null, 2));
-  console.log('====================================================');
+    // Summary Output
+    const summary = {
+      batch10: res10,
+      batch25: res25,
+      batch50: res50,
+      raceResults,
+      heartbeatStats,
+      adminMonitorResults,
+      dbIntegrity
+    };
+
+    console.log('================ JSON SUMMARY OUTPUT ================');
+    console.log(JSON.stringify(summary, null, 2));
+    console.log('====================================================');
+  } finally {
+    // Guaranteed Cleanup: Delete only the exact generated load-test event
+    if (testEventContext?.eventId && testEventContext?.adminToken) {
+      console.log('\n🧹 Performing automated teardown & cleanup of test arena...');
+      const { eventId, customEventId, adminToken } = testEventContext;
+
+      // Strict safety validation: verify this is indeed a load-test event created by this run
+      if (customEventId && customEventId.startsWith('LOAD_TEST_EVT_') && eventId) {
+        const cleanupRes = await timedFetch(`/api/v1/admin/events/${eventId}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${adminToken}` }
+        });
+        if (cleanupRes.ok) {
+          console.log(`✔ Successfully cleaned up test event (${eventId} / ${customEventId}).\n`);
+        } else {
+          console.warn(`⚠️ Teardown warning: Failed to delete test event (${eventId}): HTTP ${cleanupRes.status}\n`);
+        }
+      } else {
+        console.warn('⚠️ Teardown skipped: Event ID does not match safety prefix.\n');
+      }
+    }
+  }
 }
 
 runPhase5MasterLoadSuite().catch(err => {
