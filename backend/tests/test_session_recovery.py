@@ -240,3 +240,84 @@ async def test_session_recovery_non_existent_id(async_client):
     res = await async_client.get("/api/v1/game/session/PP-NONEXISTENT-UUID")
     assert res.status_code == 404
     assert "not found" in res.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_question_complete_id_validation_regression(async_client, multi_stage_event):
+    """
+    Comprehensive regression test for Question Completion ID Desync:
+    1. Q1 completion with wrong ID is rejected with 400.
+    2. Q2 completion while session is at Q1 is rejected with 400.
+    3. Q1 completion with custom_id ('Q1') succeeds and advances to Q2.
+    4. Response contains authoritative next question (Q2).
+    5. Repeated Q1 completion is idempotent and returns 200.
+    6. Q2 completion with UUID succeeds and finishes event.
+    """
+    event, q1, q2 = multi_stage_event
+
+    # 1. Start Session
+    start_res = await async_client.post(
+        "/api/v1/game/session/start",
+        json={"player_name": "Sync Tester", "register_number": "REG-SYNC-01", "event_id": event.id}
+    )
+    assert start_res.status_code == 201
+    session_id = start_res.json()["session_id"]
+
+    # 2. Complete placements on Q1
+    for s_id, c_id in [("S1", "led"), ("S2", "resistor")]:
+        p_res = await async_client.post(
+            "/api/v1/game/placement/attempt",
+            json={"session_id": session_id, "question_id": q1.id, "socket_id": s_id, "component_id": c_id}
+        )
+        assert p_res.status_code == 200
+        assert p_res.json()["correct"] is True
+
+    # 3. Attempt completion with WRONG ID (e.g. Q999 or stale defaultChallenges ID) -> MUST REJECT WITH 400
+    wrong_comp_res = await async_client.post(
+        "/api/v1/game/question/complete",
+        json={"session_id": session_id, "question_id": "Q999_STALE_ID"}
+    )
+    assert wrong_comp_res.status_code == 400
+    assert "Question ID does not match active stage" in wrong_comp_res.json()["detail"]
+
+    # 4. Attempt completion with Q2 ID while session is on Q1 -> MUST REJECT WITH 400
+    premature_q2_res = await async_client.post(
+        "/api/v1/game/question/complete",
+        json={"session_id": session_id, "question_id": q2.id}
+    )
+    assert premature_q2_res.status_code == 400
+    assert "Question ID does not match active stage" in premature_q2_res.json()["detail"]
+
+    # 5. Complete Q1 using custom_id ('Q1') -> MUST SUCCEED
+    custom_comp_res = await async_client.post(
+        "/api/v1/game/question/complete",
+        json={"session_id": session_id, "question_id": q1.custom_id}
+    )
+    assert custom_comp_res.status_code == 200
+    comp_data = custom_comp_res.json()
+    assert comp_data["has_next_question"] is True
+    assert comp_data["next_question"]["id"] == q2.id
+    assert comp_data["next_question"]["custom_id"] == q2.custom_id
+
+    # 6. Repeated completion for Q1 -> IDEMPOTENT (returns 200)
+    repeat_res = await async_client.post(
+        "/api/v1/game/question/complete",
+        json={"session_id": session_id, "question_id": q1.id}
+    )
+    assert repeat_res.status_code == 200
+    assert repeat_res.json()["message"] == "Stage already completed."
+
+    # 7. Complete Q2 placements and complete using UUID
+    p_q2 = await async_client.post(
+        "/api/v1/game/placement/attempt",
+        json={"session_id": session_id, "question_id": q2.id, "socket_id": "S1", "component_id": "ammeter"}
+    )
+    assert p_q2.status_code == 200
+
+    q2_comp_res = await async_client.post(
+        "/api/v1/game/question/complete",
+        json={"session_id": session_id, "question_id": str(q2.id)}
+    )
+    assert q2_comp_res.status_code == 200
+    assert q2_comp_res.json()["event_completed"] is True
+    assert q2_comp_res.json()["has_next_question"] is False

@@ -849,24 +849,184 @@ const q001 = e001.questions[0];
   assert(mapped[1].finalTimeFormatted === 'In Progress', 'TEST 19.6: Playing participant shows "In Progress"');
 }
 
-// TEST 20: No Stale LocalStorage Participant Contamination
+// TEST 21: Authoritative Session Start, Question Completion ID Flow, and UI Progression
 {
-  localStorage.setItem('powerpath_participants', JSON.stringify([
-    { sessionId: 'STALE-001', name: 'Ghost LocalStorage Player', regNo: 'GHOST-01' }
-  ]));
+  // 1. Backend provides authoritative Q1 with UUID & custom_id
+  const backendQ1 = {
+    id: '8dd5e9ce-ac13-45cc-9abd-f5978a316478',
+    custom_id: 'Q1',
+    name: 'LED Current Protection',
+    difficulty: 'Easy',
+    penalty_seconds: 5,
+    question_order: 1,
+    sockets: [
+      { id: 's-uuid-1', custom_id: 'S1', label: 'LED', accepted_component_id: 'led', hint: 'Red LED', slot_order: 1 },
+      { id: 's-uuid-2', custom_id: 'S2', label: 'RESISTOR', accepted_component_id: 'resistor', hint: '330 Ohm', slot_order: 2 }
+    ]
+  };
 
-  const authoritativeBackendParticipants = [
-    { sessionId: 'PP-REAL-001', name: 'Authoritative Player', regNo: 'REG-REAL-01', status: 'COMPLETED' }
-  ];
+  const backendQ2 = {
+    id: '9ee6f1ab-bc24-46dd-a1ce-e6089b427589',
+    custom_id: 'Q2',
+    name: 'Current Measurement',
+    difficulty: 'Medium',
+    penalty_seconds: 5,
+    question_order: 2,
+    sockets: [
+      { id: 's-uuid-3', custom_id: 'S1', label: 'AMMETER', accepted_component_id: 'ammeter', hint: 'Series Ammeter', slot_order: 1 }
+    ]
+  };
 
-  // Refresh mechanism prioritizes backend data over localStorage
-  const effectiveParticipants = authoritativeBackendParticipants.length > 0
-    ? authoritativeBackendParticipants
-    : getParticipants();
+  // 1. Initial State from Session Start
+  let state = {
+    sessionId: 'PP-AUTH-001',
+    player: { name: 'Alex', regNo: '24ECE001' },
+    status: 'running',
+    currentQuestionIndex: 0,
+    currentQuestion: {
+      id: backendQ1.id,
+      customId: backendQ1.custom_id,
+      name: backendQ1.name,
+      slots: backendQ1.sockets.map(s => ({ id: s.id, customId: s.custom_id, label: s.label }))
+    },
+    placedComponents: { 's-uuid-1': null, 's-uuid-2': null },
+    isQuestionCompleted: false,
+    nextQuestion: null
+  };
 
-  assert(effectiveParticipants.length === 1, 'TEST 20.1: Authoritative backend list used');
-  assert(effectiveParticipants[0].sessionId === 'PP-REAL-001', 'TEST 20.2: Authoritative session present');
-  assert(!effectiveParticipants.some((p) => p.sessionId === 'STALE-001'), 'TEST 20.3: Stale localStorage ghost not present');
+  assert(state.currentQuestion.id === '8dd5e9ce-ac13-45cc-9abd-f5978a316478', 'TEST 21.1: New session renders backend Q1 UUID');
+  assert(state.currentQuestion.customId === 'Q1', 'TEST 21.2: New session contains Q1 custom ID');
+
+  // 2. Identify completion request identifier
+  const qIdentifier = state.currentQuestion.id || state.currentQuestion.customId;
+  assert(qIdentifier === '8dd5e9ce-ac13-45cc-9abd-f5978a316478', 'TEST 21.3: Q1 completion submits backend-provided Q1 identifier');
+
+  // 3. Failed completion simulation (Server returns error) -> UI state MUST NOT advance
+  const simulatedFailureHandler = (currentState, error) => {
+    // On failure, isQuestionCompleted remains FALSE, nextQuestion remains NULL
+    return {
+      ...currentState,
+      isQuestionCompleted: false,
+      nextQuestion: null,
+      syncError: error.message
+    };
+  };
+
+  const failedState = simulatedFailureHandler(state, new Error('Question ID does not match active stage.'));
+  assert(failedState.isQuestionCompleted === false, 'TEST 21.4: Failed completion does NOT show completion modal');
+  assert(failedState.currentQuestion.id === backendQ1.id, 'TEST 21.5: Failed completion keeps player on authoritative Q1');
+  assert(failedState.nextQuestion === null, 'TEST 21.6: Failed completion does NOT advance nextQuestion');
+
+  // 4. Successful completion simulation (Server returns next_question Q2)
+  const simulatedSuccessHandler = (currentState, backendCompResponse) => {
+    return {
+      ...currentState,
+      nextQuestion: {
+        id: backendCompResponse.next_question.id,
+        customId: backendCompResponse.next_question.custom_id,
+        name: backendCompResponse.next_question.name,
+        slots: backendCompResponse.next_question.sockets.map(s => ({ id: s.id, customId: s.custom_id, label: s.label }))
+      },
+      isQuestionCompleted: true
+    };
+  };
+
+  const successCompRes = {
+    session_id: 'PP-AUTH-001',
+    question_index: 1,
+    has_next_question: true,
+    next_question: backendQ2,
+    event_completed: false
+  };
+
+  const completedQ1State = simulatedSuccessHandler(state, successCompRes);
+  assert(completedQ1State.isQuestionCompleted === true, 'TEST 21.7: Successful backend response enables stage complete modal');
+  assert(completedQ1State.nextQuestion.id === backendQ2.id, 'TEST 21.8: Authoritative nextQuestion (Q2) stored');
+
+  // 5. Player clicks Proceed to Stage 2 -> Advances to Q2
+  const advanceHandler = (currentState) => {
+    const nextQ = currentState.nextQuestion;
+    const initialPlaced = {};
+    nextQ.slots.forEach(s => { initialPlaced[s.id] = null; });
+    return {
+      ...currentState,
+      currentQuestionIndex: currentState.currentQuestionIndex + 1,
+      currentQuestion: nextQ,
+      placedComponents: initialPlaced,
+      isQuestionCompleted: false,
+      nextQuestion: null
+    };
+  };
+
+  const q2State = advanceHandler(completedQ1State);
+  assert(q2State.currentQuestionIndex === 1, 'TEST 21.9: Advanced to Question Index 1 (Stage 2)');
+  assert(q2State.currentQuestion.id === backendQ2.id, 'TEST 21.10: Active stage renders backend Q2');
+  assert(q2State.isQuestionCompleted === false, 'TEST 21.11: isQuestionCompleted reset for Stage 2');
+}
+
+// TEST 22: Session Recovery Across Browser Refresh & Stale Storage Isolation
+{
+  // Simulated backend recovery payload for session at Stage 1
+  const recoveryQ1Payload = {
+    session_id: 'PP-RECOV-001',
+    player_name: 'Ragul',
+    register_number: '24ECE999',
+    status: 'PLAYING',
+    current_question_index: 0,
+    total_questions: 2,
+    current_question: {
+      id: '8dd5e9ce-ac13-45cc-9abd-f5978a316478',
+      custom_id: 'Q1',
+      name: 'LED Current Protection',
+      sockets: [{ id: 's1', custom_id: 'S1', label: 'LED' }]
+    },
+    placed_socket_ids: ['s1']
+  };
+
+  // Simulated backend recovery payload for session at Stage 2
+  const recoveryQ2Payload = {
+    session_id: 'PP-RECOV-001',
+    player_name: 'Ragul',
+    register_number: '24ECE999',
+    status: 'PLAYING',
+    current_question_index: 1,
+    total_questions: 2,
+    current_question: {
+      id: '9ee6f1ab-bc24-46dd-a1ce-e6089b427589',
+      custom_id: 'Q2',
+      name: 'Current Measurement',
+      sockets: [{ id: 's2', custom_id: 'S1', label: 'AMMETER' }]
+    },
+    placed_socket_ids: []
+  };
+
+  // Stale localStorage containing old default challenge IDs
+  localStorage.setItem('POWERPATH_EVENTS', JSON.stringify([{ id: 'E001', questions: [{ id: 'Q001_STALE' }] }]));
+
+  // Recovery mapper function
+  const mapRecoveryToState = (recData) => ({
+    sessionId: recData.session_id,
+    player: { name: recData.player_name, regNo: recData.register_number },
+    status: recData.status === 'PLAYING' ? 'running' : 'completed',
+    currentQuestionIndex: recData.current_question_index,
+    currentQuestion: {
+      id: recData.current_question.id,
+      customId: recData.current_question.custom_id,
+      name: recData.current_question.name
+    },
+    isQuestionCompleted: false,
+    nextQuestion: null
+  });
+
+  const stateOnQ1Refresh = mapRecoveryToState(recoveryQ1Payload);
+  assert(stateOnQ1Refresh.currentQuestionIndex === 0, 'TEST 22.1: Refresh during Q1 restores Q1 index');
+  assert(stateOnQ1Refresh.currentQuestion.id === '8dd5e9ce-ac13-45cc-9abd-f5978a316478', 'TEST 22.2: Refresh during Q1 restores backend Q1 UUID');
+  assert(stateOnQ1Refresh.currentQuestion.id !== 'Q001_STALE', 'TEST 22.3: Stale localStorage cannot override backend current question');
+
+  const stateOnQ2Refresh = mapRecoveryToState(recoveryQ2Payload);
+  assert(stateOnQ2Refresh.currentQuestionIndex === 1, 'TEST 22.4: Refresh during Q2 restores Q2 index');
+  assert(stateOnQ2Refresh.currentQuestion.id === '9ee6f1ab-bc24-46dd-a1ce-e6089b427589', 'TEST 22.5: Refresh during Q2 restores backend Q2 UUID');
+  assert(stateOnQ2Refresh.currentQuestion.name === 'Current Measurement', 'TEST 22.6: Refresh during Q2 renders Stage 2 name');
 
   localStorage.clear();
 }

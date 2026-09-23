@@ -22,7 +22,7 @@ export function Game({
   const activeEvent = gameState.event || event;
   const currentQIndex = gameState.currentQuestionIndex ?? 0;
   const currentQuestion = gameState.currentQuestion || activeEvent?.questions?.[currentQIndex] || null;
-  const totalQuestions = gameState.totalQuestions || activeEvent?.questions?.length || 1;
+  const totalQuestions = gameState.totalQuestions || activeEvent?.totalQuestions || activeEvent?.questions?.length || 1;
   const totalSlots = currentQuestion?.slots?.length || 5;
 
   // Watch lastAction to trigger UI shake/snap animations

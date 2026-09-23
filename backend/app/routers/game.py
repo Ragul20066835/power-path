@@ -493,8 +493,9 @@ def complete_question_stage(
     questions = db.query(Question).filter(Question.event_id == session.event_id).order_by(Question.question_order.asc()).all()
 
     # Check if question has already been completed in an earlier step (idempotent duplicate request)
-    completed_q_ids = [q.id for q in questions[:session.current_question_index]] + [q.custom_id for q in questions[:session.current_question_index]]
-    if req.question_id in completed_q_ids:
+    completed_q_ids = {str(q.id).strip() for q in questions[:session.current_question_index]} | {str(q.custom_id).strip() for q in questions[:session.current_question_index]}
+    req_q_id = str(req.question_id).strip()
+    if req_q_id in completed_q_ids:
         has_next = session.current_question_index < len(questions)
         next_q = questions[session.current_question_index] if has_next else None
         return QuestionCompleteResponse(
@@ -521,7 +522,14 @@ def complete_question_stage(
         )
 
     current_q = questions[session.current_question_index]
-    if req.question_id not in (current_q.id, current_q.custom_id):
+    valid_ids = {str(current_q.id).strip(), str(current_q.custom_id).strip()}
+    try:
+        curr_uuid = str(uuid.UUID(str(current_q.id).strip()))
+        valid_ids.add(curr_uuid)
+    except (ValueError, AttributeError):
+        pass
+
+    if req_q_id not in valid_ids and str(current_q.id).strip() != req_q_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Question ID does not match active stage.")
 
     # Verify all sockets for current_q have been solved

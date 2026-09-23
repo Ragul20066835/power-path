@@ -361,12 +361,17 @@ export function App() {
           });
         }
 
+        if (sessionData.event) {
+          setActiveEvent(sessionData.event);
+        }
+
         setGameState({
           sessionId: sessionData.sessionId,
           player: sessionData.player,
           status: 'running',
           currentQuestionIndex: sessionData.currentQuestionIndex || 0,
           currentQuestion: sessionData.currentQuestion,
+          event: sessionData.event || activeEvent,
           placedComponents: initialPlaced,
           wrongAttempts: 0,
           penaltySeconds: 0,
@@ -381,10 +386,10 @@ export function App() {
         });
 
         soundEngine.playClick();
-        const totalQ = sessionData.totalQuestions || activeEvent?.questions?.length || 1;
+        const totalQ = sessionData.totalQuestions || sessionData.event?.totalQuestions || activeEvent?.questions?.length || 1;
         showToast(
           'Circuit Challenge Initialized',
-          `Event: ${activeEvent?.name || 'Round 1'} (${totalQ} stages).`,
+          `Event: ${sessionData.event?.name || activeEvent?.name || 'Tournament'} (${totalQ} stages).`,
           'info',
           3500
         );
@@ -397,7 +402,8 @@ export function App() {
 
   const handleAttemptPlacement = useCallback(
     async (componentId, slotId, question) => {
-      if (!gameState.sessionId || !question || isPlacementPending) {
+      const activeQuestion = gameState.currentQuestion || question;
+      if (!gameState.sessionId || !activeQuestion || isPlacementPending) {
         return;
       }
 
@@ -409,9 +415,11 @@ export function App() {
       setIsPlacementPending(true);
 
       try {
+        // Authoritative question identifier provided directly by backend session
+        const qIdentifier = activeQuestion.id || activeQuestion.customId;
         const outcome = await apiService.attemptPlacement(
           gameState.sessionId,
-          question.id,
+          qIdentifier,
           slotId,
           componentId
         );
@@ -419,21 +427,21 @@ export function App() {
         if (outcome.correct) {
           soundEngine.playSnap();
           const component = COMPONENTS_MAP[componentId];
-          const slot = question?.slots?.find((s) => s.id === slotId);
+          const slot = activeQuestion?.slots?.find((s) => s.id === slotId || s.customId === slotId);
 
           const updatedPlaced = {
             ...gameState.placedComponents,
             [slotId]: componentId
           };
 
-          const allSlots = question.slots || [];
-          const allFilled = allSlots.every((s) => Boolean(updatedPlaced[s.id]));
+          const allSlots = activeQuestion.slots || [];
+          const allFilled = allSlots.length > 0 && allSlots.every((s) => Boolean(updatedPlaced[s.id]));
 
+          // Update placed sockets in UI state immediately (DO NOT set isQuestionCompleted here)
           setGameState((prev) => ({
             ...prev,
             placedComponents: updatedPlaced,
-            lastAction: { type: 'CORRECT_PLACEMENT', slotId, componentId },
-            isQuestionCompleted: allFilled
+            lastAction: { type: 'CORRECT_PLACEMENT', slotId, componentId }
           }));
 
           showToast(
@@ -443,11 +451,15 @@ export function App() {
             2000
           );
 
+          // ONLY when all slots are completed, submit completion to backend authoritative engine
           if (allFilled) {
-            soundEngine.playVictory();
             try {
-              const compRes = await apiService.completeQuestion(gameState.sessionId, question.id);
+              const compRes = await apiService.completeQuestion(gameState.sessionId, qIdentifier);
+
+              soundEngine.playVictory();
+
               if (compRes.hasNextQuestion) {
+                // Authoritative stage advancement confirmed by backend
                 setGameState((prev) => ({
                   ...prev,
                   nextQuestion: compRes.nextQuestion,
@@ -457,6 +469,7 @@ export function App() {
                   wrongAttempts: compRes.wrongAttemptsTotal ?? prev.wrongAttempts,
                   penaltySeconds: compRes.penaltySecondsTotal ?? prev.penaltySeconds
                 }));
+
                 showToast(
                   'STAGE COMPLETED!',
                   `Question ${gameState.currentQuestionIndex + 1} circuit verified. Ready for next stage!`,
@@ -464,7 +477,7 @@ export function App() {
                   3500
                 );
               } else if (compRes.eventCompleted) {
-                // Final session finish
+                // Final tournament stage complete -> Fetch official result from backend
                 const finishRes = await apiService.finishSession(gameState.sessionId);
                 soundEngine.playVictory();
                 setGameState((prev) => ({
@@ -482,6 +495,7 @@ export function App() {
                     rank: finishRes.rank
                   }
                 }));
+
                 showToast(
                   'CHAMPIONSHIP CIRCUIT COMPLETE!',
                   'All stages completed! Performance telemetry logged.',
@@ -490,15 +504,21 @@ export function App() {
                 );
               }
             } catch (compErr) {
-              console.error('Stage completion error:', compErr);
-              showToast('Stage Completion Sync Error', compErr.message || 'Could not verify stage completion with server.', 'error', 4000);
+              console.error('Stage completion sync error:', compErr);
+              // On error, player remains safely on active question without showing false victory
+              showToast(
+                'Stage Completion Sync Error',
+                compErr.message || 'Could not verify stage completion with server.',
+                'error',
+                4000
+              );
             }
           }
         } else {
           // Incorrect placement
           soundEngine.playError();
           const component = COMPONENTS_MAP[componentId];
-          const slot = question?.slots?.find((s) => s.id === slotId);
+          const slot = activeQuestion?.slots?.find((s) => s.id === slotId || s.customId === slotId);
 
           setGameState((prev) => ({
             ...prev,
@@ -522,7 +542,14 @@ export function App() {
         setIsPlacementPending(false);
       }
     },
-    [gameState.sessionId, gameState.placedComponents, gameState.currentQuestionIndex, isPlacementPending, showToast]
+    [
+      gameState.sessionId,
+      gameState.currentQuestion,
+      gameState.placedComponents,
+      gameState.currentQuestionIndex,
+      isPlacementPending,
+      showToast
+    ]
   );
 
   const handleAdvanceToNextQuestion = useCallback(() => {
