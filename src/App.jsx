@@ -149,7 +149,9 @@ export function App() {
       if (adminEvts && adminEvts.length > 0) {
         setEvents(adminEvts);
         const act = adminEvts.find((e) => e.status === 'ACTIVE') || null;
-        setActiveEvent(act);
+        if (viewMode === 'admin') {
+          setActiveEvent(act);
+        }
       } else {
         setEvents(getEvents());
       }
@@ -190,7 +192,7 @@ export function App() {
     } catch (e) {
       setSettings(getLocalSettings());
     }
-  }, []);
+  }, [viewMode]);
 
   // --------------------------------------------------------------------------
   // INITIAL DATA & SESSION RECOVERY
