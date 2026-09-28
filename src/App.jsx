@@ -239,10 +239,6 @@ export function App() {
         try {
           const recovered = await apiService.recoverSession(savedSessionId);
           if (recovered && recovered.sessionId) {
-            if (recovered.event) {
-              setActiveEvent(recovered.event);
-            }
-
             const placedMap = {};
             if (recovered.currentQuestion && recovered.currentQuestion.slots) {
               recovered.currentQuestion.slots.forEach((s) => {
